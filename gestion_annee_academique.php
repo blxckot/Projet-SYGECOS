@@ -46,7 +46,7 @@ try {
     global $pdo;
     if (!isset($pdo)) {
         $pdo = new PDO("mysql:host=127.0.0.1;port=3306;dbname=sygecos;charset=utf8mb4", "root", "");
-        $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+        $pdo->setAttribute(PDO_ATTR_ERRMODE, PDO_ERRMODE_EXCEPTION);
     }
     
     // Vérifier si la colonne statut existe
@@ -427,6 +427,7 @@ function handleFetchAllAjax($pdo) {
             font-size: var(--text-xl);
             font-weight: 600;
             color: var(--gray-800);
+            line-height: 1.2;
         }
 
         .topbar-right {
@@ -1091,7 +1092,6 @@ function handleFetchAllAjax($pdo) {
                     </form>
                 </div>
 
-                <!-- Barre de recherche et Boutons d'exportation -->
                 <div class="search-bar">
                     <div class="search-input-container">
                         <i class="fas fa-search search-icon"></i>
@@ -1120,15 +1120,13 @@ function handleFetchAllAjax($pdo) {
                             <button class="btn btn-secondary" id="supprimerBtn" disabled>
                                 <i class="fas fa-trash-alt"></i> Supprimer
                             </button>
-                            <!-- L'ancien bouton Exporter a été déplacé/supprimé car les nouveaux boutons d'exportation sont au-dessus -->
-                        </div>
+                            </div>
                     </div>
                     <div class="table-container">
                         <table class="data-table" id="academicYearsTable">
                             <thead>
                                 <tr>
-                                    <th width="40px"></th> <!-- Colonne pour la case à cocher -->
-                                    <th>ID</th>
+                                    <th width="40px"></th> <th>ID</th>
                                     <th>Année Académique</th>
                                     <th>Statut</th>
                                     <th>Actions</th>
