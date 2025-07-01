@@ -1,22 +1,32 @@
 <?php
-session_start(); // Démarre la session pour récupérer les messages d'erreur
+// Inclure config.php en premier pour démarrer la session et accéder aux utilitaires
+require_once 'config.php'; // Ce fichier démarre déjà la session et contient les fonctions utilitaires.
 
 $login_error = '';
-$attempts_remaining = '';
 $is_blocked = false;
+$attempts_remaining = '';
+$block_time_remaining = 0;
 
+// Récupérer le message d'erreur de la session et le vider
 if (isset($_SESSION['login_error'])) {
     $login_error = $_SESSION['login_error'];
     unset($_SESSION['login_error']);
 }
 
-if (isset($_SESSION['attempts_remaining'])) {
-    $attempts_remaining = $_SESSION['attempts_remaining'];
+// Obtenir l'adresse IP du client
+$ip_address = $_SERVER['REMOTE_ADDR'] ?? $_SERVER['HTTP_X_FORWARDED_FOR'] ?? 'unknown';
+
+// Vérifier l'état de blocage via la fonction isIPBlocked de config.php
+// isIPBlocked met à jour $_SESSION['account_blocked'], $_SESSION['block_time_remaining'] et $_SESSION['attempts_remaining']
+$is_blocked = isIPBlocked($pdo, $ip_address);
+
+// Récupérer les informations de session mises à jour par isIPBlocked
+if ($is_blocked) {
+    $block_time_remaining = $_SESSION['block_time_remaining'] ?? 0;
+} else {
+    $attempts_remaining = $_SESSION['attempts_remaining'] ?? '';
 }
 
-if (isset($_SESSION['account_blocked'])) {
-    $is_blocked = $_SESSION['account_blocked'];
-}
 ?>
 <!DOCTYPE html>
 <html lang="fr">
@@ -116,11 +126,11 @@ if (isset($_SESSION['account_blocked'])) {
             left: 0;
             width: 100%;
             height: 100%;
-            background: linear-gradient(135deg, 
-                var(--primary-100) 0%, 
-                var(--accent-50) 25%, 
-                var(--primary-50) 50%, 
-                var(--accent-100) 75%, 
+            background: linear-gradient(135deg,
+                var(--primary-100) 0%,
+                var(--accent-50) 25%,
+                var(--primary-50) 50%,
+                var(--accent-100) 75%,
                 var(--primary-100) 100%);
             z-index: -1;
         }
@@ -170,8 +180,8 @@ if (isset($_SESSION['account_blocked'])) {
         /* === CÔTÉ GAUCHE GLASSMORPHISM === */
         .login-visual {
             position: relative;
-            background: linear-gradient(135deg, 
-                rgba(59, 130, 246, 0.8) 0%, 
+            background: linear-gradient(135deg,
+                rgba(59, 130, 246, 0.8) 0%,
                 rgba(37, 99, 235, 0.9) 25%,
                 rgba(29, 78, 216, 0.8) 50%,
                 rgba(30, 64, 175, 0.9) 75%,
@@ -192,8 +202,8 @@ if (isset($_SESSION['account_blocked'])) {
             left: -50%;
             width: 200%;
             height: 200%;
-            background: radial-gradient(circle, 
-                rgba(255, 255, 255, 0.1) 0%, 
+            background: radial-gradient(circle,
+                rgba(255, 255, 255, 0.1) 0%,
                 transparent 50%);
             animation: rotate 30s linear infinite;
         }
@@ -210,8 +220,8 @@ if (isset($_SESSION['account_blocked'])) {
             right: -20%;
             width: 200px;
             height: 200px;
-            background: radial-gradient(circle, 
-                rgba(34, 197, 94, 0.3) 0%, 
+            background: radial-gradient(circle,
+                rgba(34, 197, 94, 0.3) 0%,
                 transparent 70%);
             border-radius: 50%;
             animation: pulse 4s ease-in-out infinite;
@@ -461,6 +471,10 @@ if (isset($_SESSION['account_blocked'])) {
         .password-toggle:hover {
             color: var(--accent-600);
         }
+        .password-toggle:disabled {
+            cursor: not-allowed;
+            opacity: 0.6;
+        }
 
         .forgot-password {
             text-align: right;
@@ -632,7 +646,6 @@ if (isset($_SESSION['account_blocked'])) {
             }
         }
 
-        /* Compteur de tentatives */
         .attempts-counter {
             background: var(--warning-500);
             color: white;
@@ -682,35 +695,36 @@ if (isset($_SESSION['account_blocked'])) {
                 </div>
 
                 <?php if ($is_blocked): ?>
-                    <div class="blocked-message">
+                    <div class="blocked-message" id="blocked-message">
                         <i class="fas fa-lock"></i>
                         Accès temporairement bloqué. Trop de tentatives de connexion échouées.
-                        <br>Veuillez réessayer dans quelques minutes.
+                        <br>Veuillez réessayer dans <span id="time-remaining"><?php echo $block_time_remaining; ?></span> secondes.
                     </div>
                 <?php endif; ?>
 
-                <?php if ($login_error && !$is_blocked): ?>
+                <?php if ($login_error): ?>
                     <div class="error-message">
                         <i class="fas fa-exclamation-triangle"></i>
                         <?php echo htmlspecialchars($login_error); ?>
                     </div>
                 <?php endif; ?>
 
-                <?php if ($attempts_remaining && !$is_blocked): ?>
-                    <div class="attempts-counter">
+                <?php if ($attempts_remaining !== '' && !$is_blocked): // Affiche seulement si des tentatives sont restantes et non bloqué ?>
+                    <div class="warning-message">
                         <i class="fas fa-exclamation-circle"></i>
                         Il vous reste <?php echo $attempts_remaining; ?> tentative(s)
                     </div>
                 <?php endif; ?>
 
-                <form class="login-form" action="process_login.php" method="POST" <?php echo $is_blocked ? 'style="pointer-events: none; opacity: 0.6;"' : ''; ?>>
+
+                <form class="login-form" action="process_login.php" method="POST">
                     <div class="form-group">
                         <label for="identifier" class="form-label">Email ou Identifiant</label>
-                        <input 
-                            type="text" 
-                            id="identifier" 
-                            name="identifier" 
-                            class="form-input" 
+                        <input
+                            type="text"
+                            id="identifier"
+                            name="identifier"
+                            class="form-input"
                             placeholder="Entrez votre email ou identifiant"
                             required
                             <?php echo $is_blocked ? 'disabled' : ''; ?>
@@ -720,16 +734,18 @@ if (isset($_SESSION['account_blocked'])) {
                     <div class="form-group">
                         <label for="password" class="form-label">Mot de passe</label>
                         <div class="password-container">
-                            <input 
-                                type="password" 
-                                id="password" 
-                                name="password" 
-                                class="form-input" 
+                            <input
+                                type="password"
+                                id="password"
+                                name="password"
+                                class="form-input"
                                 placeholder="Entrez votre mot de passe"
                                 required
                                 <?php echo $is_blocked ? 'disabled' : ''; ?>
                             >
-                            <button type="button" class="password-toggle" onclick="togglePassword()" <?php echo $is_blocked ? 'disabled' : ''; ?>>
+                            <button type="button" class="password-toggle" onclick="togglePassword()"
+                                <?php echo $is_blocked ? 'disabled' : ''; ?>
+                            >
                                 <i class="fas fa-eye" id="toggle-icon"></i>
                             </button>
                         </div>
@@ -738,7 +754,9 @@ if (isset($_SESSION['account_blocked'])) {
                         </div>
                     </div>
 
-                    <button type="submit" class="login-button" <?php echo $is_blocked ? 'disabled' : ''; ?>>
+                    <button type="submit" class="login-button"
+                        <?php echo $is_blocked ? 'disabled' : ''; ?>
+                    >
                         <i class="fas fa-sign-in-alt"></i>
                         Se connecter
                     </button>
@@ -751,7 +769,7 @@ if (isset($_SESSION['account_blocked'])) {
         function togglePassword() {
             const passwordInput = document.getElementById('password');
             const toggleIcon = document.getElementById('toggle-icon');
-            
+
             if (passwordInput.type === 'password') {
                 passwordInput.type = 'text';
                 toggleIcon.classList.remove('fa-eye');
@@ -772,36 +790,30 @@ if (isset($_SESSION['account_blocked'])) {
                 }, 100 * (index + 1));
             });
 
-            // Auto-focus sur le champ identifiant si pas bloqué
-            <?php if (!$is_blocked): ?>
-            document.getElementById('identifier').focus();
-            <?php endif; ?>
+            // Auto-focus sur le champ identifiant
+            const identifierInput = document.getElementById('identifier');
+            if (identifierInput && !identifierInput.disabled) {
+                identifierInput.focus();
+            }
         });
 
-        // Gestion du décompte de blocage
-        <?php if ($is_blocked): ?>
-        let timeLeft = <?php echo $_SESSION['block_time_remaining'] ?? 300; ?>;
-        
+        // JavaScript pour gérer le compte à rebours de blocage
+        <?php if ($is_blocked && $block_time_remaining > 0): ?>
+        let timeLeft = <?php echo $block_time_remaining; ?>;
+        const timeRemainingSpan = document.getElementById('time-remaining');
+
         function updateTimer() {
             if (timeLeft > 0) {
-                const minutes = Math.floor(timeLeft / 60);
-                const seconds = timeLeft % 60;
-                const blockedMessage = document.querySelector('.blocked-message');
-                if (blockedMessage) {
-                    blockedMessage.innerHTML = `
-                        <i class="fas fa-lock"></i>
-                        Accès temporairement bloqué. Trop de tentatives de connexion échouées.
-                        <br>Veuillez réessayer dans ${minutes}:${seconds.toString().padStart(2, '0')}.
-                    `;
-                }
+                timeRemainingSpan.textContent = timeLeft;
                 timeLeft--;
                 setTimeout(updateTimer, 1000);
             } else {
+                // Quand le temps est écoulé, recharger la page
                 location.reload();
             }
         }
-        
-        updateTimer();
+
+        updateTimer(); // Démarrer le compte à rebours au chargement de la page
         <?php endif; ?>
     </script>
 </body>
