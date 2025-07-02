@@ -18,11 +18,6 @@ define('APP_URL', 'http://localhost/sygecos');
 
 // Configuration des sessions
 define('SESSION_TIMEOUT', 3600); // 1 heure en secondes
-
-// Configuration de sécurité pour les tentatives de connexion
-define('MAX_LOGIN_ATTEMPTS', 3); // Nombre maximum de tentatives avant blocage
-define('LOCKOUT_TIME', 10);      // Durée du blocage en secondes (10 secondes)
-
 try {
     // Connexion à la base de données avec PDO
     $pdo = new PDO(
