@@ -182,3 +182,4 @@ try {
     header("Location: loginForm.php");
     exit;
 }
+ 
