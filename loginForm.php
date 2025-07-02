@@ -5,16 +5,18 @@ require_once 'config.php';
 
 // Récupération du message d'erreur (une seule fois)
 $login_error = $_SESSION['login_error'] ?? '';
-unset($_SESSION['login_error']);
+unset($_SESSION['login_error'], $_SESSION['reset_message']);
 ?>
 <!DOCTYPE html>
 <html lang="fr">
+
 <head>
     <meta charset="UTF-8">
     <title>Connexion – SYGECOS</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <link rel="stylesheet" href="loginForm_style.css">
 </head>
+
 <body>
     <!-- WRAPPER POUR CENTRER -->
     <div class="login-container">
@@ -60,8 +62,7 @@ unset($_SESSION['login_error']);
                             name="identifier"
                             class="form-input"
                             placeholder="Entrez votre email ou identifiant"
-                            required
-                        >
+                            required>
                     </div>
 
                     <div class="form-group">
@@ -73,8 +74,7 @@ unset($_SESSION['login_error']);
                                 name="password"
                                 class="form-input"
                                 placeholder="Entrez votre mot de passe"
-                                required
-                            >
+                                required>
                             <button type="button" class="password-toggle" onclick="togglePassword()">
                                 <i class="fas fa-eye" id="toggle-icon"></i>
                             </button>
@@ -117,4 +117,5 @@ unset($_SESSION['login_error']);
         });
     </script>
 </body>
+
 </html>
