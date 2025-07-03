@@ -6,24 +6,230 @@ if (!isLoggedIn()) {
     redirect('loginForm.php'); // Redirige si l'utilisateur n'est pas connecté
 }
 
-// You might fetch actual dashboard data here
-// For example:
-// $totalStudents = $pdo->query("SELECT COUNT(*) FROM etudiant")->fetchColumn();
-// $totalPayments = $pdo->query("SELECT SUM(montant_paye) FROM paiements")->fetchColumn();
-// $pendingPayments = $pdo->query("SELECT COUNT(*) FROM etudiant WHERE montant_du > 0")->fetchColumn();
+// Fonction utilitaire pour le temps relatif
+if (!function_exists('getTimeAgo')) {
+    function getTimeAgo($timestamp) {
+        $time_ago = strtotime($timestamp);
+        $current_time = time();
+        $time_difference = $current_time - $time_ago;
+        $seconds = $time_difference;
+        $minutes      = round($seconds / 60 );
+        $hours        = round($seconds / 3600);
+        $days         = round($seconds / 86400);
+        $weeks        = round($seconds / 604800);
+        $months       = round($seconds / 2629440);
+        $years        = round($seconds / 31553280);
 
-// Placeholder data for demonstration
-$totalStudents = 1250;
-$totalFilieres = 15;
-$totalNiveaux = 7;
-$totalPayments = 75000000; // Example total amount
-$pendingPayments = 230; // Example count of students with pending payments
-$recentActivities = [
-    ['description' => 'Inscription de Jean Dupont en Licence 1 Informatique', 'time' => 'il y a 2 heures'],
-    ['description' => 'Paiement de scolarité reçu de Marie Curie (500,000 FCFA)', 'time' => 'il y a 1 jour'],
-    ['description' => 'Nouvelle filière "Génie Logiciel" ajoutée', 'time' => 'il y a 3 jours'],
-    ['description' => 'Validation des notes de BTS 2 Comptabilité', 'time' => 'il y a 5 jours'],
-];
+        if ($seconds <= 60) {
+            return "il y a " . $seconds . " secondes";
+        } else if ($minutes <= 60) {
+            return $minutes == 1 ? "il y a 1 minute" : "il y a ".$minutes." minutes";
+        } else if ($hours <= 24) {
+            return $hours == 1 ? "il y a 1 heure" : "il y a ".$hours." heures";
+        } else if ($days <= 30) {
+            return $days == 1 ? "il y a 1 jour" : "il y a ".$days." jours";
+        } else if ($weeks <= 4.3) {
+            return $weeks == 1 ? "il y a 1 semaine" : "il y a ".$weeks." semaines";
+        } else if ($months <= 12) {
+            return $months == 1 ? "il y a 1 mois" : "il y a ".$months." mois";
+        } else {
+            return $years == 1 ? "il y a 1 an" : "il y a ".$years." ans";
+        }
+    }
+}
+
+// Récupération des données dynamiques depuis la base de données
+
+// Déterminer l'année académique courante de manière dynamique
+$currentAcademicYearId = null;
+$currentAcademicYearLabel = "Non définie";
+try {
+    $stmtCurrentYear = $pdo->query("SELECT id_Ac, date_deb, date_fin FROM année_academique WHERE statut = 'active' LIMIT 1");
+    $activeYear = $stmtCurrentYear->fetch(PDO::FETCH_ASSOC);
+    if ($activeYear) {
+        $currentAcademicYearId = $activeYear['id_Ac'];
+        $currentAcademicYearLabel = date('Y', strtotime($activeYear['date_deb'])) . '-' . date('Y', strtotime($activeYear['date_fin']));
+    } else {
+        // Fallback: Si aucune année n'est active, essayez la plus récente en préparation ou archivée
+        $stmtLatestYear = $pdo->query("SELECT id_Ac, date_deb, date_fin FROM année_academique ORDER BY date_deb DESC LIMIT 1");
+        $latestYear = $stmtLatestYear->fetch(PDO::FETCH_ASSOC);
+        if ($latestYear) {
+            $currentAcademicYearId = $latestYear['id_Ac'];
+            $currentAcademicYearLabel = date('Y', strtotime($latestYear['date_deb'])) . '-' . date('Y', strtotime($latestYear['date_fin'])) . ' (Non Active)';
+            error_log("Aucune année académique active trouvée. Utilisation de la dernière année enregistrée: " . $currentAcademicYearLabel);
+        } else {
+            error_log("Aucune année académique trouvée dans la base de données.");
+        }
+    }
+} catch (PDOException $e) {
+    error_log("Erreur lors de la récupération de l'année académique courante: " . $e->getMessage());
+    // currentAcademicYearId et Label resteront null/non définis
+}
+
+
+// Total Étudiants (pour l'année académique courante si définie)
+$totalStudents = 0;
+try {
+    if ($currentAcademicYearId) {
+        $stmt = $pdo->prepare("SELECT COUNT(*) FROM inscrire WHERE fk_id_Ac = :year_id");
+        $stmt->bindParam(':year_id', $currentAcademicYearId, PDO::PARAM_INT);
+        $stmt->execute();
+        $totalStudents = $stmt->fetchColumn();
+    } else {
+        $totalStudents = $pdo->query("SELECT COUNT(*) FROM etudiant")->fetchColumn(); // Fallback to all students if no active year
+    }
+} catch (PDOException $e) {
+    $totalStudents = 0; // Fallback en cas d'erreur
+    error_log("Erreur PDO pour totalStudents: " . $e->getMessage());
+}
+
+// Total Filières
+try {
+    $totalFilieres = $pdo->query("SELECT COUNT(*) FROM filiere")->fetchColumn();
+} catch (PDOException $e) {
+    $totalFilieres = 0; // Fallback
+    error_log("Erreur PDO pour totalFilieres: " . $e->getMessage());
+}
+
+// Total Niveaux d'Étude (en se basant sur la table niveau_etude)
+try {
+    $totalNiveaux = $pdo->query("SELECT COUNT(*) FROM niveau_etude")->fetchColumn();
+} catch (PDOException $e) {
+    $totalNiveaux = 0; // Fallback
+    error_log("Erreur PDO pour totalNiveaux: " . $e->getMessage());
+}
+
+// Montant Scolarité Reçue (somme des total_verse de la table paiement_scolarite pour l'année courante)
+$totalPayments = 0;
+try {
+    if ($currentAcademicYearId) {
+        $stmt = $pdo->prepare("SELECT SUM(total_verse) FROM paiement_scolarite WHERE fk_id_Ac = :year_id");
+        $stmt->bindParam(':year_id', $currentAcademicYearId, PDO::PARAM_INT);
+        $stmt->execute();
+        $totalPayments = $stmt->fetchColumn();
+    }
+    if ($totalPayments === null) {
+        $totalPayments = 0;
+    }
+} catch (PDOException $e) {
+    $totalPayments = 0; // Fallback
+    error_log("Erreur PDO pour totalPayments: " . $e->getMessage());
+}
+
+// Paiements en Attente (étudiants avec reste_a_payer > 0 pour l'année courante)
+$pendingPayments = 0;
+try {
+    if ($currentAcademicYearId) {
+        $stmt = $pdo->prepare("SELECT COUNT(DISTINCT fk_num_etu) FROM paiement_scolarite WHERE fk_id_Ac = :year_id AND montant_total > total_verse");
+        $stmt->bindParam(':year_id', $currentAcademicYearId, PDO::PARAM_INT);
+        $stmt->execute();
+        $pendingPayments = $stmt->fetchColumn();
+    }
+} catch (PDOException $e) {
+    $pendingPayments = 0; // Fallback
+    error_log("Erreur PDO pour pendingPayments: " . $e->getMessage());
+}
+
+// Éligibles Diplôme (Dynamisé selon critères)
+// Critères: Scolarité entièrement payée ET crédits suffisants ET inscrits au niveau final pour l'année active.
+$eligibleForDiploma = 0;
+if ($currentAcademicYearId) {
+    try {
+        $finalNiveauId = 1; // ID du niveau M2 dans sygecos (23).sql (assumé comme niveau final)
+        $creditsRequis = 60; // Seuil de crédits requis pour l'éligibilité (comme dans verification_eligibilite.php)
+
+        // Vérifier si la vue `vue_paiements_etudiants` existe
+        $checkViewStmt = $pdo->query("SHOW TABLES LIKE 'vue_paiements_etudiants'");
+        $vuePaiementsExists = ($checkViewStmt->rowCount() > 0);
+
+        if ($vuePaiementsExists) {
+            $sqlEligibles = "
+                SELECT COUNT(DISTINCT e.num_etu)
+                FROM etudiant e
+                INNER JOIN inscrire i ON e.num_etu = i.fk_num_etu
+                LEFT JOIN evaluer ev ON e.num_etu = ev.fk_num_etu AND ev.fk_id_Ac = i.fk_id_Ac
+                LEFT JOIN ecue ec ON ev.fk_id_ECUE = ec.id_ECUE
+                LEFT JOIN vue_paiements_etudiants vp ON e.num_etu = vp.num_etu AND vp.id_Ac = i.fk_id_Ac
+                WHERE i.fk_id_Ac = :current_ac_year_id
+                AND i.fk_id_niv_etu = :final_niveau_id
+                AND (vp.montant_total IS NULL OR vp.reste_a_payer <= 0) -- Scolarité entièrement payée ou pas de record de paiement (interprété comme non dû)
+                GROUP BY e.num_etu
+                HAVING SUM(CASE WHEN ev.note >= 10 THEN ec.credit_ECUE ELSE 0 END) >= :credits_requis
+            ";
+        } else {
+            // Fallback si la vue n'existe pas, ou si le calcul des paiements se fait différemment
+            // Dans ce cas, nous ne pourrions nous fier qu'aux crédits.
+            // Cependant, la vue existe dans le SQL fourni, donc ce bloc ne devrait pas être atteint en production.
+            $sqlEligibles = "
+                SELECT COUNT(DISTINCT e.num_etu)
+                FROM etudiant e
+                INNER JOIN inscrire i ON e.num_etu = i.fk_num_etu
+                LEFT JOIN evaluer ev ON e.num_etu = ev.fk_num_etu AND ev.fk_id_Ac = i.fk_id_Ac
+                LEFT JOIN ecue ec ON ev.fk_id_ECUE = ec.id_ECUE
+                WHERE i.fk_id_Ac = :current_ac_year_id
+                AND i.fk_id_niv_etu = :final_niveau_id
+                GROUP BY e.num_etu
+                HAVING SUM(CASE WHEN ev.note >= 10 THEN ec.credit_ECUE ELSE 0 END) >= :credits_requis
+            ";
+            error_log("Vue 'vue_paiements_etudiants' manquante. Calcul des éligibles au diplôme basé uniquement sur les crédits.");
+        }
+
+        $stmtEligibles = $pdo->prepare($sqlEligibles);
+        $stmtEligibles->bindParam(':current_ac_year_id', $currentAcademicYearId, PDO::PARAM_INT);
+        $stmtEligibles->bindParam(':final_niveau_id', $finalNiveauId, PDO::PARAM_INT);
+        $stmtEligibles->bindParam(':credits_requis', $creditsRequis, PDO::PARAM_INT);
+        $stmtEligibles->execute();
+        $eligibleForDiploma = $stmtEligibles->rowCount();
+
+    } catch (PDOException $e) {
+        $eligibleForDiploma = 0;
+        error_log("Erreur PDO pour eligibleForDiploma: " . $e->getMessage());
+    }
+}
+
+
+// Activités Récentes (Exemple: Inscriptions et Paiements récents pour l'année courante)
+$recentActivities = [];
+if ($currentAcademicYearId) {
+    try {
+        // Récupérer les 3 dernières inscriptions pour l'année courante
+        $stmtInscriptions = $pdo->prepare("SELECT CONCAT('Inscription de ', e.nom_etu, ' ', e.prenoms_etu, ' en ', ne.lib_niv_etu, ' ', f.lib_filiere) AS description, i.dte_insc AS time_ FROM etudiant e JOIN inscrire i ON e.num_etu = i.fk_num_etu JOIN niveau_etude ne ON i.fk_id_niv_etu = ne.id_niv_etu JOIN filiere f ON e.fk_id_filiere = f.id_filiere WHERE i.fk_id_Ac = :year_id ORDER BY dte_insc DESC LIMIT 3");
+        $stmtInscriptions->bindParam(':year_id', $currentAcademicYearId, PDO::PARAM_INT);
+        $stmtInscriptions->execute();
+        $inscriptions = $stmtInscriptions->fetchAll(PDO::FETCH_ASSOC);
+
+        // Récupérer les 3 derniers paiements pour l'année courante
+        $stmtPaiements = $pdo->prepare("SELECT CONCAT('Paiement de scolarité reçu de ', e.nom_etu, ' ', e.prenoms_etu, ' (', vs.montant_versement, ' FCFA)') AS description, vs.date_versement AS time_ FROM versement_scolarite vs JOIN paiement_scolarite ps ON vs.fk_id_paiement = ps.id_paiement JOIN etudiant e ON ps.fk_num_etu = e.num_etu WHERE ps.fk_id_Ac = :year_id ORDER BY date_versement DESC LIMIT 3");
+        $stmtPaiements->bindParam(':year_id', $currentAcademicYearId, PDO::PARAM_INT);
+        $stmtPaiements->execute();
+        $paiements = $stmtPaiements->fetchAll(PDO::FETCH_ASSOC);
+
+        // Fusionner et trier les activités par date (plus récent en premier)
+        $allActivities = [];
+        foreach ($inscriptions as $act) {
+            $allActivities[] = ['description' => $act['description'], 'time' => $act['time_']];
+        }
+        foreach ($paiements as $act) {
+            $allActivities[] = ['description' => $act['description'], 'time' => $act['time_']];
+        }
+
+        // Sort by time in descending order
+        usort($allActivities, function($a, $b) {
+            return strtotime($b['time']) - strtotime($a['time']);
+        });
+
+        // Take the top N activities
+        $recentActivities = array_slice($allActivities, 0, 5); // Limit to 5 recent activities for display
+
+        // Format 'time' to a more human-readable format or relative time
+        foreach ($recentActivities as &$activity) {
+            $activity['time'] = getTimeAgo($activity['time']);
+        }
+
+    } catch (PDOException $e) {
+        error_log("Erreur PDO pour recentActivities: " . $e->getMessage());
+    }
+}
 ?>
 
 <!DOCTYPE html>
@@ -292,7 +498,7 @@ $recentActivities = [
             <div class="page-content">
                 <div class="page-header">
                     <h1 class="page-title-main">Tableau de Bord</h1>
-                    <p class="page-subtitle">Vue d'ensemble et statistiques clés pour la gestion de la scolarité.</p>
+                    <p class="page-subtitle">Vue d'ensemble et statistiques clés pour la gestion de la scolarité de l'année académique courante: <strong><?php echo htmlspecialchars($currentAcademicYearLabel); ?></strong></p>
                 </div>
 
                 <div class="info-grid">
@@ -358,7 +564,7 @@ $recentActivities = [
                                 <i class="fas fa-check-circle"></i>
                             </div>
                         </div>
-                        <div class="info-card-value">185</div>
+                        <div class="info-card-value"><?php echo $eligibleForDiploma; ?></div>
                         <p class="info-card-description">Étudiants éligibles pour le diplôme</p>
                     </div>
                 </div>
@@ -375,7 +581,7 @@ $recentActivities = [
                             <?php endforeach; ?>
                         <?php else: ?>
                             <li class="activity-item">
-                                <span class="activity-description" style="text-align: center; width: 100%; color: var(--gray-500);">Aucune activité récente.</span>
+                                <span class="activity-description" style="text-align: center; width: 100%; color: var(--gray-500);">Aucune activité récente pour cette année académique.</span>
                             </li>
                         <?php endif; ?>
                     </ul>

@@ -149,7 +149,7 @@
             <div class="nav-section-title">Commission de Validation</div>
             <div class="nav-items-wrapper">
                 <div class="nav-item">
-                    <a href="rapport_stage_commission.php" class="nav-link">
+                    <a href=#rien class="nav-link">
                         <div class="nav-icon">
                             <i class="fas fa-file-upload"></i>
                         </div>
@@ -252,8 +252,8 @@
     }
 
     .sidebar-logo {
-        width: 60px;
-        height: 60px;
+        width: 60px; /* Taille plus grande pour le logo comme dans gestion_utilisateur.php */
+        height: 60px; /* Taille plus grande pour le logo comme dans gestion_utilisateur.php */
         background: var(--accent-500);
         border-radius: var(--radius-lg);
         display: flex;

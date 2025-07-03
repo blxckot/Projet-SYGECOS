@@ -9,7 +9,7 @@ if (!isLoggedIn()) {
 // Traitement AJAX pour l'ajout/suppression/modification de filiere_niveau_detail
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
-    
+
     $action = $_POST['action'] ?? '';
 
     try {
@@ -29,6 +29,21 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if (empty($fk_id_filiere) || empty($fk_id_niv_etu) || !is_numeric($montant_scolarite_total) || $montant_scolarite_total <= 0) {
                     throw new Exception("Tous les champs obligatoires (Filière, Niveau, Montant total) doivent être remplis avec des valeurs valides.");
                 }
+
+                // Validation: Montants de versement doivent être positifs s'ils sont renseignés
+                if (($versement_1 !== null && $versement_1 < 0) ||
+                    ($versement_2 !== null && $versement_2 < 0) ||
+                    ($versement_3 !== null && $versement_3 < 0) ||
+                    ($versement_4 !== null && $versement_4 < 0)) {
+                    throw new Exception("Les montants des versements doivent être positifs.");
+                }
+
+                // Validation: La somme des versements doit être égale au montant total
+                $sum_versements = ($versement_1 ?? 0) + ($versement_2 ?? 0) + ($versement_3 ?? 0) + ($versement_4 ?? 0);
+                if (round($sum_versements, 2) != round($montant_scolarite_total, 2)) {
+                    throw new Exception("La somme des versements (" . number_format($sum_versements, 2, ',', ' ') . " FCFA) doit être égale au montant total de scolarité (" . number_format($montant_scolarite_total, 2, ',', ' ') . " FCFA).");
+                }
+
 
                 // Vérifier si la combinaison Filière-Niveau existe déjà
                 $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM filiere_niveau_detail WHERE fk_id_filiere = ? AND fk_id_niv_etu = ?");
@@ -81,6 +96,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     throw new Exception("Tous les champs obligatoires (Filière, Niveau, Montant total) doivent être remplis avec des valeurs valides.");
                 }
 
+                 // Validation: Montants de versement doivent être positifs s'ils sont renseignés
+                 if (($versement_1 !== null && $versement_1 < 0) ||
+                     ($versement_2 !== null && $versement_2 < 0) ||
+                     ($versement_3 !== null && $versement_3 < 0) ||
+                     ($versement_4 !== null && $versement_4 < 0)) {
+                     throw new Exception("Les montants des versements doivent être positifs.");
+                 }
+
+                 // Validation: La somme des versements doit être égale au montant total
+                 $sum_versements = ($versement_1 ?? 0) + ($versement_2 ?? 0) + ($versement_3 ?? 0) + ($versement_4 ?? 0);
+                 if (round($sum_versements, 2) != round($montant_scolarite_total, 2)) {
+                     throw new Exception("La somme des versements (" . number_format($sum_versements, 2, ',', ' ') . " FCFA) doit être égale au montant total de scolarité (" . number_format($montant_scolarite_total, 2, ',', ' ') . " FCFA).");
+                 }
+
                 // Vérifier si la combinaison Filière-Niveau existe déjà pour un autre ID (pour éviter les doublons)
                 $checkStmt = $pdo->prepare("SELECT COUNT(*) FROM filiere_niveau_detail WHERE fk_id_filiere = ? AND fk_id_niv_etu = ? AND id_filiere_niveau != ?");
                 $checkStmt->execute([$fk_id_filiere, $fk_id_niv_etu, $id_filiere_niveau]);
@@ -99,60 +128,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }
                 break;
 
-            case 'delete':
-                $idsFiliereNiveau = json_decode($_POST['ids_filiere_niveau'], true);
-
-                foreach ($idsFiliereNiveau as $idFiliereNiveau) {
-                    if (empty($idFiliereNiveau)) {
-                        throw new Exception("ID de détail de scolarité manquant pour la suppression.");
-                    }
-
-                    // Before deleting from filiere_niveau_detail, check if any students are directly linked
-                    // This is complex as etudiant directly links to filiere AND niveau_etude.
-                    // We need to fetch the filiere_id and niv_etu_id from filiere_niveau_detail first.
-                    $getFiliereNiveauIdsStmt = $pdo->prepare("SELECT fk_id_filiere, fk_id_niv_etu FROM filiere_niveau_detail WHERE id_filiere_niveau = ?");
-                    $getFiliereNiveauIdsStmt->execute([$idFiliereNiveau]);
-                    $filiereNiveauPair = $getFiliereNiveauIdsStmt->fetch(PDO::FETCH_ASSOC);
-
-                    if ($filiereNiveauPair) {
-                        $filiereId = $filiereNiveauPair['fk_id_filiere'];
-                        $nivEtuId = $filiereNiveauPair['fk_id_niv_etu'];
-
-                        // Check if this specific filiere-niveau combination is used by any student
-                        $checkUsageStmt = $pdo->prepare("SELECT COUNT(*) FROM etudiant WHERE fk_id_filiere = ? AND fk_id_niv_etu = ?");
-                        $checkUsageStmt->execute([$filiereId, $nivEtuId]);
-                        if ($checkUsageStmt->fetchColumn() > 0) {
-                            $filiereLibStmt = $pdo->prepare("SELECT lib_filiere FROM filiere WHERE id_filiere = ?");
-                            $filiereLibStmt->execute([$filiereId]);
-                            $filiereName = $filiereLibStmt->fetchColumn();
-
-                            $niveauLibStmt = $pdo->prepare("SELECT lib_niv_etu FROM niveau_etude WHERE id_niv_etu = ?");
-                            $niveauLibStmt->execute([$nivEtuId]);
-                            $niveauName = $niveauLibStmt->fetchColumn();
-
-                            throw new Exception("Impossible de supprimer les détails de scolarité pour la filière '{$filiereName}' et le niveau '{$niveauName}'. Ils sont associés à des étudiants. Veuillez d'abord modifier ou supprimer les étudiants associés.");
-                        }
-                    } else {
-                        // If filiere_niveau_detail record not found, it might have been already deleted or invalid ID
-                        throw new Exception("Détail de scolarité ID {$idFiliereNiveau} non trouvé.");
-                    }
-
-                    // If no students are linked, proceed with deletion
-                    $stmt = $pdo->prepare("DELETE FROM filiere_niveau_detail WHERE id_filiere_niveau = ?");
-                    $stmt->execute([$idFiliereNiveau]);
-
-                    if ($stmt->rowCount() === 0) {
-                        throw new Exception("Les détails de scolarité ID {$idFiliereNiveau} non trouvés ou déjà supprimés.");
-                    }
-                }
-                
-                $pdo->commit();
-                echo json_encode(['success' => true, 'message' => 'Détail(s) de scolarité supprimé(s) avec succès !']);
-                break;
-
             case 'get_details': // New action to get details for modification
                 $id_filiere_niveau = $_POST['id_filiere_niveau'];
-                $query = "SELECT 
+                $query = "SELECT
                             fnd.id_filiere_niveau,
                             fnd.fk_id_filiere,
                             fnd.fk_id_niv_etu,
@@ -170,11 +148,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $stmt = $pdo->prepare($query);
                 $stmt->execute([$id_filiere_niveau]);
                 $details = $stmt->fetch(PDO::FETCH_ASSOC);
-                
+
                 if ($details) {
                     echo json_encode(['success' => true, 'data' => $details]);
                 } else {
                     echo json_encode(['success' => false, 'message' => 'Détails non trouvés.']);
+                }
+                break;
+
+            case 'get_single_detail_for_dossier': // Nouvelle action pour récupérer les détails pour le dossier
+                $id_filiere_niveau = $_POST['id_filiere_niveau'];
+                $query = "SELECT
+                            fnd.id_filiere_niveau,
+                            f.lib_filiere,
+                            ne.lib_niv_etu,
+                            fnd.montant_scolarite_total,
+                            fnd.versement_1,
+                            fnd.versement_2,
+                            fnd.versement_3,
+                            fnd.versement_4
+                          FROM filiere_niveau_detail fnd
+                          JOIN filiere f ON fnd.fk_id_filiere = f.id_filiere
+                          JOIN niveau_etude ne ON fnd.fk_id_niv_etu = ne.id_niv_etu
+                          WHERE fnd.id_filiere_niveau = ?";
+                $stmt = $pdo->prepare($query);
+                $stmt->execute([$id_filiere_niveau]);
+                $detail = $stmt->fetch(PDO::FETCH_ASSOC);
+
+                if ($detail) {
+                    echo json_encode(['success' => true, 'data' => $detail]);
+                } else {
+                    echo json_encode(['success' => false, 'message' => 'Détails non trouvés pour ce dossier.']);
                 }
                 break;
 
@@ -191,7 +195,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 // Récupérer les données existantes pour l'affichage (filiere_niveau_detail)
 $filiereNiveauDetails = [];
 try {
-    $query = "SELECT 
+    $query = "SELECT
                 fnd.id_filiere_niveau,
                 f.lib_filiere,
                 ne.lib_niv_etu,
@@ -453,11 +457,11 @@ try {
             background-color: #e68a00;
         }
 
-        .action-button.delete {
-            background-color: var(--error-500);
+        .action-button.folder { /* New style for folder button */
+            background-color: var(--info-500);
         }
-        .action-button.delete:hover {
-            background-color: #cc3131;
+        .action-button.folder:hover {
+            background-color: var(--accent-700);
         }
 
         /* Checkbox styling */
@@ -679,6 +683,11 @@ try {
         .filter-option:hover {
             background-color: var(--gray-100);
         }
+        .filter-option.active {
+            background-color: var(--accent-100); /* Highlight active filter */
+            color: var(--accent-800);
+            font-weight: 600;
+        }
 
         /* Modal de message */
         .message-modal {
@@ -782,26 +791,26 @@ try {
             .main-content {
                 margin-left: var(--sidebar-collapsed-width);
             }
-            
+
             .sidebar {
                 width: var(--sidebar-collapsed-width);
             }
-            
+
             .sidebar-title,
             .nav-text,
             .nav-section-title {
                 opacity: 0;
                 pointer-events: none;
             }
-            
+
             .nav-link {
                 justify-content: center;
             }
-            
+
             .sidebar-toggle .fa-bars {
                 display: none;
             }
-            
+
             .sidebar-toggle .fa-times {
                 display: inline-block;
             }
@@ -811,11 +820,11 @@ try {
             .admin-layout {
                 position: relative;
             }
-            
+
             .main-content {
                 margin-left: 0;
             }
-            
+
             .sidebar {
                 position: fixed;
                 left: -100%;
@@ -824,49 +833,49 @@ try {
                 height: 100vh;
                 overflow-y: auto;
             }
-            
+
             .sidebar.mobile-open {
                 left: 0;
             }
-            
+
             .mobile-menu-overlay.active {
                 display: block;
             }
-            
+
             .sidebar-toggle .fa-bars {
                 display: inline-block;
             }
-            
+
             .sidebar-toggle .fa-times {
                 display: none;
             }
-            
+
             .form-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .table-header {
                 flex-direction: column;
                 align-items: flex-start;
                 gap: var(--space-4);
             }
-            
+
             .table-actions {
                 width: 100%;
                 justify-content: flex-end;
                 margin-top: var(--space-4);
             }
-            
+
             .search-bar {
                 flex-direction: column;
                 align-items: stretch;
             }
-            
+
             .download-buttons {
                 width: 100%;
                 justify-content: flex-end;
             }
-            
+
             .btn {
                 padding: var(--space-2) var(--space-3);
                 font-size: var(--text-sm);
@@ -885,40 +894,40 @@ try {
             .page-content {
                 padding: var(--space-4);
             }
-            
+
             .form-card,
             .table-card,
             .search-bar {
                 padding: var(--space-4);
             }
-            
+
             .page-title-main {
                 font-size: var(--text-2xl);
             }
-            
+
             .page-subtitle {
                 font-size: var(--text-base);
             }
-            
+
             .form-actions {
                 flex-direction: column;
                 gap: var(--space-2);
             }
-            
+
             .btn {
                 width: 100%;
                 justify-content: center;
             }
-            
+
             .table-actions {
                 flex-wrap: wrap;
                 gap: var(--space-2);
             }
-            
+
             .action-buttons {
                 flex-wrap: wrap;
             }
-            
+
             .search-button {
                 width: 100%;
                 justify-content: center;
@@ -1025,7 +1034,7 @@ try {
                                     <i class="fas fa-filter"></i> Filtres
                                 </button>
                                 <div class="filter-dropdown-content" id="filterDropdown">
-                                    <div class="filter-option" data-filter="all">
+                                    <div class="filter-option active" data-filter="all">
                                         <i class="fas fa-list"></i> Tout
                                     </div>
                                     <div class="filter-option" data-filter="filiere-asc">
@@ -1051,10 +1060,7 @@ try {
                             <button class="btn btn-secondary" id="modifierFiliereNiveauBtn" disabled>
                                 <i class="fas fa-edit"></i> <span class="action-text">Modifier</span>
                             </button>
-                            <button class="btn btn-secondary" id="supprimerFiliereNiveauBtn" disabled>
-                                <i class="fas fa-trash-alt"></i> <span class="action-text">Supprimer</span>
-                            </button>
-                        </div>
+                            </div>
                     </div>
                     <div class="table-container">
                         <table class="data-table" id="filiereNiveauTable">
@@ -1102,8 +1108,8 @@ try {
                                                 <button class="action-button edit" title="Modifier" onclick="modifierFiliereNiveau('<?php echo htmlspecialchars($detail['id_filiere_niveau']); ?>')">
                                                     <i class="fas fa-pencil-alt"></i>
                                                 </button>
-                                                <button class="action-button delete" title="Supprimer" onclick="supprimerFiliereNiveau('<?php echo htmlspecialchars($detail['id_filiere_niveau']); ?>')">
-                                                    <i class="fas fa-trash"></i>
+                                                <button class="action-button folder" title="Dossier" onclick="showDossierDetails('<?php echo htmlspecialchars($detail['id_filiere_niveau']); ?>')">
+                                                    <i class="fas fa-folder-open"></i>
                                                 </button>
                                             </div>
                                         </td>
@@ -1128,6 +1134,21 @@ try {
         </div>
     </div>
 
+    <div class="message-modal" id="dossierModal">
+        <div class="message-modal-content" style="max-width: 600px; text-align: left;">
+            <button class="message-close" id="dossierClose">&times;</button>
+            <h3 class="message-title" style="margin-bottom: var(--space-4);">Détails du Dossier de Scolarité</h3>
+            <div id="dossierDetailsContent" style="line-height: 1.8;">
+                </div>
+            <div class="form-actions" style="margin-top: var(--space-6); justify-content: center;">
+                <button class="btn btn-secondary" id="downloadDossierPdfBtn">
+                    <i class="fas fa-file-pdf"></i> Télécharger PDF
+                </button>
+                </div>
+        </div>
+    </div>
+
+
     <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
@@ -1150,7 +1171,6 @@ try {
 
         const filiereNiveauTableBody = document.querySelector('#filiereNiveauTable tbody');
         const modifierFiliereNiveauBtn = document.getElementById('modifierFiliereNiveauBtn');
-        const supprimerFiliereNiveauBtn = document.getElementById('supprimerFiliereNiveauBtn');
         const submitBtn = document.getElementById('submitBtn');
         const submitText = document.getElementById('submitText');
         const cancelBtn = document.getElementById('cancelBtn');
@@ -1174,6 +1194,15 @@ try {
         const exportPdfBtn = document.getElementById('exportPdfBtn');
         const exportExcelBtn = document.getElementById('exportExcelBtn');
         const exportCsvBtn = document.getElementById('exportCsvBtn');
+
+        // Nouvelles variables DOM pour la modal dossier
+        const dossierModal = document.getElementById('dossierModal');
+        const dossierClose = document.getElementById('dossierClose');
+        const dossierDetailsContent = document.getElementById('dossierDetailsContent');
+        const downloadDossierPdfBtn = document.getElementById('downloadDossierPdfBtn');
+        // const downloadDossierExcelBtn = document.getElementById('downloadDossierExcelBtn'); // Supprimé
+        let currentDossierData = null; // To store data for single exports
+
 
         // Fonction pour afficher les messages dans une modal
         function showAlert(message, type = 'success', title = null) {
@@ -1204,7 +1233,7 @@ try {
                     break;
                 case 'error':
                     messageIcon.classList.add('error');
-                    messageIcon.innerHTML = '<i class="fas fa-exclamation-circle"></i>';
+                    messageIcon.innerHTML = '<i class="fas fa-times-circle"></i>'; // Changed to times-circle for error
                     break;
                 case 'warning':
                     messageIcon.classList.add('warning');
@@ -1239,10 +1268,10 @@ try {
         function toggleSidebar() {
             sidebar.classList.toggle('mobile-open');
             mobileMenuOverlay.classList.toggle('active');
-            
+
             const barsIcon = sidebarToggle.querySelector('.fa-bars');
             const timesIcon = sidebarToggle.querySelector('.fa-times');
-            
+
             if (sidebar.classList.contains('mobile-open')) {
                 barsIcon.style.display = 'none';
                 timesIcon.style.display = 'inline-block';
@@ -1281,16 +1310,13 @@ try {
 
         // Fonction pour mettre à jour l'état des boutons
         function updateActionButtons() {
+            // Seul le bouton Modifier est géré par sélection multiple
             if (selectedDetails.size === 1) {
                 modifierFiliereNiveauBtn.disabled = false;
-                supprimerFiliereNiveauBtn.disabled = false;
-            } else if (selectedDetails.size > 1) {
-                modifierFiliereNiveauBtn.disabled = true; // Can't modify multiple at once
-                supprimerFiliereNiveauBtn.disabled = false;
             } else {
                 modifierFiliereNiveauBtn.disabled = true;
-                supprimerFiliereNiveauBtn.disabled = true;
             }
+            // Le bouton de suppression globale a été retiré
         }
 
         // Fonction pour formater les montants
@@ -1344,8 +1370,8 @@ try {
                             <button class="action-button edit" title="Modifier" onclick="modifierFiliereNiveau('${detail.id_filiere_niveau}')">
                                 <i class="fas fa-pencil-alt"></i>
                             </button>
-                            <button class="action-button delete" title="Supprimer" onclick="supprimerFiliereNiveau('${detail.id_filiere_niveau}')">
-                                <i class="fas fa-trash"></i>
+                            <button class="action-button folder" title="Dossier" onclick="showDossierDetails('${detail.id_filiere_niveau}')">
+                                <i class="fas fa-folder-open"></i>
                             </button>
                         </div>
                     </td>
@@ -1360,7 +1386,7 @@ try {
         // Fonction pour attacher les événements aux lignes (checkbox)
         function attachEventListenersToRow(row) {
             const checkbox = row.querySelector('input[type="checkbox"]');
-            
+
             checkbox.addEventListener('change', function() {
                 if (this.checked) {
                     selectedDetails.add(this.value);
@@ -1375,17 +1401,17 @@ try {
         function searchTable() {
             const searchTerm = searchInput.value.toLowerCase();
             const rows = filiereNiveauTableBody.querySelectorAll('tr');
-            
+
             let foundRows = 0;
             rows.forEach(row => {
                 if (row.querySelector('td[colspan="10"]')) { // This is the "no data" row
                     row.style.display = 'none'; // Hide it during search
                     return;
                 }
-                
+
                 const filiereText = row.cells[2].textContent.toLowerCase();
                 const niveauText = row.cells[3].textContent.toLowerCase();
-                
+
                 if (filiereText.includes(searchTerm) || niveauText.includes(searchTerm)) {
                     row.style.display = '';
                     foundRows++;
@@ -1422,28 +1448,28 @@ try {
         // Fonction pour appliquer les filtres
         function applyFilter(filterType) {
             const rows = Array.from(filiereNiveauTableBody.querySelectorAll('tr'));
-            
+
             const emptyRow = filiereNiveauTableBody.querySelector('td[colspan="10"]');
             if (emptyRow) {
                 emptyRow.closest('tr').remove();
             }
-            
+
             rows.forEach(row => {
                 if (!row.querySelector('td[colspan="10"]')) {
                     row.style.display = '';
                 }
             });
-            
+
             rows.sort((a, b) => {
                 if (a.querySelector('td[colspan="10"]') || b.querySelector('td[colspan="10"]')) return 0;
-                
+
                 const filiereA = a.cells[2].textContent.toLowerCase();
                 const filiereB = b.cells[2].textContent.toLowerCase();
                 const niveauA = a.cells[3].textContent.toLowerCase();
                 const niveauB = b.cells[3].textContent.toLowerCase();
                 const montantA = parseFloat(a.cells[4].textContent.replace(/\s/g, '').replace(',', '.'));
                 const montantB = parseFloat(b.cells[4].textContent.replace(/\s/g, '').replace(',', '.'));
-                
+
                 switch (filterType) {
                     case 'filiere-asc': return filiereA.localeCompare(filiereB);
                     case 'filiere-desc': return filiereB.localeCompare(filiereA);
@@ -1454,11 +1480,11 @@ try {
                     default: return 0; // 'all' or fallback
                 }
             });
-            
+
             rows.forEach(row => {
                 filiereNiveauTableBody.appendChild(row);
             });
-            
+
             if (filiereNiveauTableBody.children.length === 0 || (filiereNiveauTableBody.children.length === 1 && filiereNiveauTableBody.querySelector('td[colspan="10"]'))) {
                 filiereNiveauTableBody.innerHTML = `
                     <tr>
@@ -1506,8 +1532,6 @@ try {
                     showAlert(result.message, 'success');
                     if (editingDetailId) {
                         // For update, just need to re-render the row with fresh data or update manually
-                        // Simplest is to fetch fresh data for the row if complex
-                        // For this case, we can update directly as fields match inputs
                         const row = document.querySelector(`tr[data-id="${editingDetailId}"]`);
                         if (row) {
                             row.cells[2].textContent = fkIdFiliereSelect.options[fkIdFiliereSelect.selectedIndex].text;
@@ -1579,9 +1603,9 @@ try {
                     formTitle.textContent = `Modifier les Détails pour ${detail.lib_filiere} - ${detail.lib_niv_etu}`;
                     submitText.textContent = 'Mettre à jour';
                     submitBtn.innerHTML = '<i class="fas fa-edit"></i> Mettre à jour';
-                    
+
                     document.querySelector('.form-card').scrollIntoView({ behavior: 'smooth' });
-                    
+
                     // Uncheck all other checkboxes and select only this one
                     document.querySelectorAll('#filiereNiveauTable tbody input[type="checkbox"]').forEach(checkbox => {
                         checkbox.checked = false;
@@ -1601,65 +1625,7 @@ try {
             }
         }
 
-        // Bouton de suppression de la sélection multiple ou d'un seul élément
-        supprimerFiliereNiveauBtn.addEventListener('click', async function() {
-            if (selectedDetails.size === 0) {
-                showAlert('Aucun détail de scolarité sélectionné pour la suppression.', 'warning');
-                return;
-            }
-
-            const idsArray = Array.from(selectedDetails);
-            const confirmationMessage = idsArray.length === 1
-                ? `Êtes-vous sûr de vouloir supprimer ce détail de scolarité (ID: ${idsArray[0]}) ?\n\nCette action est irréversible et pourrait échouer si des étudiants sont associés à cette combinaison Filière/Niveau.`
-                : `Êtes-vous sûr de vouloir supprimer les ${idsArray.length} détail(s) de scolarité sélectionné(s) ?\n\nCette action est irréversible et pourrait échouer si des étudiants sont associés à ces combinaisons Filière/Niveau.`;
-
-            if (confirm(confirmationMessage)) {
-                let successCount = 0;
-                let errorMessages = [];
-
-                for (const idDetail of idsArray) {
-                    try {
-                        const result = await makeAjaxRequest({
-                            action: 'delete',
-                            ids_filiere_niveau: JSON.stringify([idDetail]) // Pass as array
-                        });
-                        if (result.success) {
-                            successCount++;
-                            document.querySelector(`tr[data-id="${idDetail}"]`).remove();
-                        } else {
-                            errorMessages.push(`Détail ID ${idDetail}: ${result.message}`);
-                        }
-                    } catch (error) {
-                        errorMessages.push(`Détail ID ${idDetail}: Erreur réseau ou serveur.`);
-                    }
-                }
-
-                selectedDetails.clear(); // Efface la sélection après le traitement
-                updateActionButtons();
-                resetForm(); // Reset form in case a deleted item was being edited
-
-                if (successCount > 0) {
-                    showAlert(`${successCount} détail(s) de scolarité supprimé(s) avec succès !`, 'success');
-                }
-                if (errorMessages.length > 0) {
-                    showAlert(`Erreurs lors de la suppression de certains détails:\n${errorMessages.join('\n')}`, 'error');
-                }
-                
-                // If no more data, display the empty message
-                if (filiereNiveauTableBody.children.length === 0) {
-                    filiereNiveauTableBody.innerHTML = `
-                        <tr>
-                            <td colspan="10" style="text-align: center; color: var(--gray-500); padding: var(--space-8);">
-                                <i class="fas fa-graduation-cap" style="font-size: 2rem; margin-bottom: var(--space-2);"></i><br>
-                                Aucun détail de scolarité trouvé. Ajoutez-en un ci-dessus.
-                            </td>
-                        </tr>
-                    `;
-                }
-            }
-        });
-
-        // Bouton Modifier global
+        // Bouton Modifier global (agit sur la sélection)
         modifierFiliereNiveauBtn.addEventListener('click', function() {
             if (selectedDetails.size === 1) {
                 const idDetail = Array.from(selectedDetails)[0];
@@ -1669,20 +1635,113 @@ try {
             }
         });
 
+        // Fonction pour afficher les détails du dossier dans une modal
+        async function showDossierDetails(id) {
+            try {
+                const result = await makeAjaxRequest({ action: 'get_single_detail_for_dossier', id_filiere_niveau: id });
+                if (result.success && result.data) {
+                    const detail = result.data;
+                    currentDossierData = detail; // Store data for export
+
+                    // Prepare content for the modal
+                    let content = '';
+                    content += `<p><strong>ID:</strong> ${detail.id_filiere_niveau}</p>`;
+                    content += `<p><strong>Filière:</strong> ${detail.lib_filiere}</p>`;
+                    content += `<p><strong>Niveau:</strong> ${detail.lib_niv_etu}</p>`;
+                    content += `<p><strong>Montant Total Scolarité:</strong> ${formatMontant(detail.montant_scolarite_total)} FCFA</p>`;
+                    content += `<p><strong>1er Versement:</strong> ${formatMontant(detail.versement_1)} FCFA</p>`;
+                    content += `<p><strong>2ème Versement:</strong> ${formatMontant(detail.versement_2)} FCFA</p>`;
+                    content += `<p><strong>3ème Versement:</strong> ${formatMontant(detail.versement_3)} FCFA</p>`;
+                    content += `<p><strong>4ème Versement:</strong> ${formatMontant(detail.versement_4)} FCFA</p>`;
+
+                    dossierDetailsContent.innerHTML = content;
+                    dossierModal.style.display = 'flex';
+                } else {
+                    showAlert(result.message || 'Erreur lors du chargement des détails du dossier.', 'error');
+                }
+            } catch (error) {
+                showAlert('Erreur réseau lors du chargement des détails du dossier.', 'error');
+            }
+        }
+
+        // Fermer la modal dossier
+        dossierClose.addEventListener('click', () => {
+            dossierModal.style.display = 'none';
+            currentDossierData = null;
+        });
+        dossierModal.addEventListener('click', function(e) {
+            if (e.target === dossierModal) {
+                dossierModal.style.display = 'none';
+                currentDossierData = null;
+            }
+        });
+
+        // Fonction d'exportation pour le dossier individuel (PDF seulement)
+        function exportSingleDetailToPdf() {
+            if (!currentDossierData) return;
+            const doc = new jsPDF();
+            const detail = currentDossierData;
+
+            // Titre centré et plus grand
+            doc.setFontSize(22);
+            doc.text("Dossier de Scolarité", doc.internal.pageSize.getWidth() / 2, 25, { align: 'center' });
+
+            doc.setFontSize(10);
+            doc.setTextColor(100); // Gray color for subtitle
+            doc.text(`Généré le: ${new Date().toLocaleDateString('fr-FR')}`, doc.internal.pageSize.getWidth() / 2, 35, { align: 'center' });
+
+
+            // Détails du dossier avec un style amélioré
+            const startY = 50;
+            const lineHeight = 10;
+            let currentY = startY;
+
+            doc.setFontSize(12);
+            doc.setTextColor(50); // Darker color for main text
+
+            const addDetailLine = (label, value) => {
+                doc.text(`${label}:`, 20, currentY);
+                doc.setFont('helvetica', 'bold');
+                doc.text(`${value}`, 80, currentY); // Adjust X position for value
+                doc.setFont('helvetica', 'normal');
+                currentY += lineHeight;
+            };
+
+            addDetailLine('ID du Dossier', detail.id_filiere_niveau);
+            addDetailLine('Filière', detail.lib_filiere);
+            addDetailLine('Niveau d\'Étude', detail.lib_niv_etu);
+            addDetailLine('Montant Total Scolarité', `${formatMontant(detail.montant_scolarite_total)} FCFA`);
+            addDetailLine('1er Versement', `${formatMontant(detail.versement_1)} FCFA`);
+            addDetailLine('2ème Versement', `${formatMontant(detail.versement_2)} FCFA`);
+            addDetailLine('3ème Versement', `${formatMontant(detail.versement_3)} FCFA`);
+            addDetailLine('4ème Versement', `${formatMontant(detail.versement_4)} FCFA`);
+
+            doc.save(`dossier_scolarite_${detail.lib_filiere}_${detail.lib_niv_etu}.pdf`);
+            showAlert('Exportation PDF du dossier terminée', 'success');
+        }
+
+        // Le bouton et la fonction d'exportation Excel pour le modal dossier sont supprimés
+
+        downloadDossierPdfBtn.addEventListener('click', exportSingleDetailToPdf);
+
+
         // Fonction pour exporter en PDF
         function exportToPdf() {
             const doc = new jsPDF('landscape'); // Use landscape for wider tables
             const title = "Liste des Détails de Scolarité par Filière et Niveau";
             const date = new Date().toLocaleDateString('fr-FR');
-            
+            const currentFilterElement = document.querySelector('.filter-option.active');
+            const filterText = currentFilterElement ? `Filtre appliqué: ${currentFilterElement.textContent.trim()}` : "Aucun filtre appliqué";
+
             doc.setFontSize(18);
             doc.text(title, doc.internal.pageSize.getWidth() / 2, 20, { align: 'center' });
             doc.setFontSize(10);
             doc.text(`Exporté le: ${date}`, doc.internal.pageSize.getWidth() / 2, 30, { align: 'center' });
-            
+            doc.text(filterText, doc.internal.pageSize.getWidth() / 2, 35, { align: 'center' }); // Added filter info
+
             const headers = [['ID', 'Filière', 'Niveau', 'Montant Total (FCFA)', '1er Versement', '2ème Versement', '3ème Versement', '4ème Versement']];
             const data = [];
-            
+
             document.querySelectorAll('#filiereNiveauTable tbody tr').forEach(row => {
                 if (!row.querySelector('td[colspan="10"]')) { // Exclude "no data" row
                     data.push([
@@ -1697,11 +1756,11 @@ try {
                     ]);
                 }
             });
-            
+
             doc.autoTable({
                 head: headers,
                 body: data,
-                startY: 40,
+                startY: 40, // Adjust startY to accommodate filter info
                 styles: {
                     fontSize: 8, // Smaller font for landscape
                     cellPadding: 2,
@@ -1717,7 +1776,7 @@ try {
                 },
                 margin: { left: 10, right: 10 }
             });
-            
+
             doc.save(`details_scolarite_${new Date().toISOString().split('T')[0]}.pdf`);
             showAlert('Exportation PDF terminée', 'success');
         }
@@ -1725,7 +1784,7 @@ try {
         // Fonction pour exporter en Excel
         function exportToExcel() {
             const data = [['ID', 'Filière', 'Niveau', 'Montant Total (FCFA)', '1er Versement', '2ème Versement', '3ème Versement', '4ème Versement']];
-            
+
             document.querySelectorAll('#filiereNiveauTable tbody tr').forEach(row => {
                 if (!row.querySelector('td[colspan="10"]')) { // Exclude "no data" row
                     data.push([
@@ -1744,34 +1803,34 @@ try {
             const ws = XLSX.utils.aoa_to_sheet(data);
             const wb = XLSX.utils.book_new();
             XLSX.utils.book_append_sheet(wb, ws, "Details Scolarite");
-            
+
             XLSX.writeFile(wb, `details_scolarite_${new Date().toISOString().split('T')[0]}.xlsx`);
-            
+
             showAlert('Exportation Excel terminée', 'success');
         }
 
         // Fonction pour exporter en CSV
         function exportToCsv() {
             let csv = "ID,Filière,Niveau,Montant Total (FCFA),1er Versement,2ème Versement,3ème Versement,4ème Versement\n";
-            
+
             document.querySelectorAll('#filiereNiveauTable tbody tr').forEach(row => {
                 if (!row.querySelector('td[colspan="10"]')) { // Exclude "no data" row
                     csv += `"${row.cells[1].textContent}","${row.cells[2].textContent}","${row.cells[3].textContent}","${row.cells[4].textContent}","${row.cells[5].textContent}","${row.cells[6].textContent}","${row.cells[7].textContent}","${row.cells[8].textContent}"\n`;
                 }
             });
-            
+
             const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
             const link = document.createElement('a');
             const url = URL.createObjectURL(blob);
-            
+
             link.setAttribute('href', url);
             link.setAttribute('download', `details_scolarite_${new Date().toISOString().split('T')[0]}.csv`);
             link.style.visibility = 'hidden';
-            
+
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
-            
+
             showAlert('Exportation CSV terminée', 'success');
         }
 

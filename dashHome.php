@@ -306,7 +306,7 @@ $user_type = $_SESSION['user_type'] ?? '';
                                 <i class="fas fa-users"></i>
                             </div>
                         </div>
-                        <div class="stat-value">248</div>
+                        <div class="stat-value">15</div>
                         <div class="stat-change positive">
                             <i class="fas fa-arrow-up"></i> +12% ce mois
                         </div>
@@ -319,7 +319,7 @@ $user_type = $_SESSION['user_type'] ?? '';
                                 <i class="fas fa-file-alt"></i>
                             </div>
                         </div>
-                        <div class="stat-value">342</div>
+                        <div class="stat-value">7</div>
                         <div class="stat-change positive">
                             <i class="fas fa-arrow-up"></i> +8% ce mois
                         </div>
@@ -345,7 +345,7 @@ $user_type = $_SESSION['user_type'] ?? '';
                                 <i class="fas fa-check-circle"></i>
                             </div>
                         </div>
-                        <div class="stat-value">98</div>
+                        <div class="stat-value">2</div>
                         <div class="stat-change positive">
                             <i class="fas fa-arrow-up"></i> +25% ce mois
                         </div>

@@ -1,6 +1,6 @@
 <?php
 // resultats_evaluations.php
-require_once 'config.php';
+require_once 'config.php'; // Connexion PDO et fonctions de sécurité
 
 if (!isLoggedIn()) {
     redirect('loginForm.php');
@@ -15,13 +15,13 @@ try {
     error_log("Erreur récupération année active: " . $e->getMessage());
 }
 
-// Récupération des niveaux d'étude
-$niveauxEtude = [];
+// Récupération des filières
+$filieres = [];
 try {
-    $stmt = $pdo->query("SELECT id_niv_etu, lib_niv_etu FROM niveau_etude ORDER BY lib_niv_etu");
-    $niveauxEtude = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->query("SELECT id_filiere, lib_filiere FROM filiere ORDER BY lib_filiere");
+    $filieres = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    error_log("Erreur récupération niveaux: " . $e->getMessage());
+    error_log("Erreur récupération filières: " . $e->getMessage());
 }
 
 // === TRAITEMENT AJAX ===
@@ -32,12 +32,24 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $action = $_POST['action'] ?? '';
         
         switch ($action) {
+            case 'charger_niveaux_par_filiere':
+                $filiereId = intval($_POST['filiere_id'] ?? 0);
+                if ($filiereId <= 0) {
+                    throw new Exception("ID de filière manquant");
+                }
+                $stmt = $pdo->prepare("SELECT id_niv_etu, lib_niv_etu FROM niveau_etude WHERE fk_id_filiere = ? ORDER BY lib_niv_etu");
+                $stmt->execute([$filiereId]);
+                $niveauxData = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['success' => true, 'data' => $niveauxData]);
+                break;
+
             case 'obtenir_statistiques_niveau':
                 $anneeId = intval($_POST['annee_id'] ?? 0);
                 $niveauId = intval($_POST['niveau_id'] ?? 0);
+                $filiereId = intval($_POST['filiere_id'] ?? 0); 
                 
-                if ($anneeId <= 0 || $niveauId <= 0) {
-                    throw new Exception("Paramètres manquants");
+                if ($anneeId <= 0 || $niveauId <= 0 || $filiereId <= 0) {
+                    throw new Exception("Paramètres manquants (Année, Niveau ou Filière)");
                 }
                 
                 // Statistiques générales du niveau
@@ -52,9 +64,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     FROM etudiant e
                     INNER JOIN inscrire i ON e.num_etu = i.fk_num_etu
                     LEFT JOIN evaluer ev ON e.num_etu = ev.fk_num_etu AND ev.fk_id_Ac = ?
-                    WHERE i.fk_id_Ac = ? AND e.fk_id_niv_etu = ?
+                    WHERE i.fk_id_Ac = ? AND e.fk_id_niv_etu = ? AND e.fk_id_filiere = ?
                 ");
-                $stmtStats->execute([$anneeId, $anneeId, $niveauId]);
+                $stmtStats->execute([$anneeId, $anneeId, $niveauId, $filiereId]); // MODIFIÉ ICI: $anneeId ajouté
                 $stats = $stmtStats->fetch(PDO::FETCH_ASSOC);
                 
                 // Répartition des notes
@@ -69,31 +81,26 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         COUNT(*) as nombre
                     FROM evaluer ev
                     INNER JOIN etudiant e ON ev.fk_num_etu = e.num_etu
-                    WHERE ev.fk_id_Ac = ? AND e.fk_id_niv_etu = ?
+                    WHERE ev.fk_id_Ac = ? AND e.fk_id_niv_etu = ? AND e.fk_id_filiere = ?
                     GROUP BY categorie
                 ");
-                $stmtRepartition->execute([$anneeId, $niveauId]);
+                $stmtRepartition->execute([$anneeId, $niveauId, $filiereId]);
                 $repartition = $stmtRepartition->fetchAll(PDO::FETCH_ASSOC);
                 
-                echo json_encode([
-                    'success' => true, 
-                    'stats' => $stats,
-                    'repartition' => $repartition
-                ]);
+                echo json_encode(['success' => true, 'data' => $repartition]); // Changed to repartition, not full stats
                 break;
                 
             case 'obtenir_resultats_detailles':
                 $anneeId = intval($_POST['annee_id'] ?? 0);
                 $niveauId = intval($_POST['niveau_id'] ?? 0);
-                $ecueId = intval($_POST['ecue_id'] ?? 0);
+                $filiereId = intval($_POST['filiere_id'] ?? 0); 
                 
-                if ($anneeId <= 0 || $niveauId <= 0) {
-                    throw new Exception("Paramètres manquants");
+                if ($anneeId <= 0 || $niveauId <= 0 || $filiereId <= 0) {
+                    throw new Exception("Paramètres manquants (Année, Niveau ou Filière)");
                 }
                 
-                $whereEcue = $ecueId > 0 ? "AND ev.fk_id_ECUE = ?" : "";
-                $params = [$anneeId, $niveauId];
-                if ($ecueId > 0) $params[] = $ecueId;
+                $whereEcue = ""; 
+                $params = [$anneeId, $anneeId, $niveauId, $filiereId]; // MODIFIÉ ICI: $anneeId ajouté
                 
                 $stmt = $pdo->prepare("
                     SELECT 
@@ -102,6 +109,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         e.prenoms_etu,
                         u.lib_UE,
                         ec.lib_ECUE,
+                        ec.credit_ECUE,
                         ev.note,
                         ev.dte_eval,
                         CASE 
@@ -115,8 +123,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     INNER JOIN inscrire i ON e.num_etu = i.fk_num_etu
                     LEFT JOIN evaluer ev ON e.num_etu = ev.fk_num_etu AND ev.fk_id_Ac = ?
                     LEFT JOIN ecue ec ON ev.fk_id_ECUE = ec.id_ECUE
-                    LEFT JOIN ue u ON ec.fk_id_UE = u.id_UE
-                    WHERE i.fk_id_Ac = ? AND e.fk_id_niv_etu = ? {$whereEcue}
+                    LEFT JOIN ue u ON ec.id_UE = u.id_UE 
+                    WHERE i.fk_id_Ac = ? AND e.fk_id_niv_etu = ? AND e.fk_id_filiere = ? {$whereEcue}
                     ORDER BY e.nom_etu, e.prenoms_etu, u.lib_UE, ec.lib_ECUE
                 ");
                 $stmt->execute($params);
@@ -128,15 +136,73 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             case 'exporter_resultats':
                 $anneeId = intval($_POST['annee_id'] ?? 0);
                 $niveauId = intval($_POST['niveau_id'] ?? 0);
+                $filiereId = intval($_POST['filiere_id'] ?? 0); 
                 $format = $_POST['format'] ?? 'excel';
                 
-                // Logique d'export (à implémenter selon vos besoins)
-                echo json_encode([
-                    'success' => true, 
-                    'message' => "Export {$format} en cours de préparation...",
-                    'download_url' => "#" // URL du fichier généré
-                ]);
-                break;
+                if ($anneeId <= 0 || $niveauId <= 0 || $filiereId <= 0) {
+                    echo json_encode(['success' => false, 'message' => "Paramètres d'export manquants."]);
+                    exit;
+                }
+                
+                // Récupérer les données pour l'export
+                $stmtExport = $pdo->prepare("
+                    SELECT 
+                        e.num_etu,
+                        e.nom_etu,
+                        e.prenoms_etu,
+                        u.lib_UE,
+                        ec.lib_ECUE,
+                        ec.credit_ECUE,
+                        ev.note,
+                        ev.dte_eval,
+                        CASE 
+                            WHEN ev.note >= 16 THEN 'Excellent'
+                            WHEN ev.note >= 14 THEN 'Bien'
+                            WHEN ev.note >= 10 THEN 'Passable'
+                            WHEN ev.note IS NOT NULL THEN 'Insuffisant'
+                            ELSE 'Non évalué'
+                        END as appreciation
+                    FROM etudiant e
+                    INNER JOIN inscrire i ON e.num_etu = i.fk_num_etu
+                    LEFT JOIN evaluer ev ON e.num_etu = ev.fk_num_etu AND ev.fk_id_Ac = ?
+                    LEFT JOIN ecue ec ON ev.fk_id_ECUE = ec.id_ECUE
+                    LEFT JOIN ue u ON ec.id_UE = u.id_UE 
+                    WHERE i.fk_id_Ac = ? AND e.fk_id_niv_etu = ? AND e.fk_id_filiere = ?
+                    ORDER BY e.nom_etu, e.prenoms_etu, u.lib_UE, ec.lib_ECUE
+                ");
+                $stmtExport->execute([$anneeId, $anneeId, $niveauId, $filiereId]); // MODIFIÉ ICI: $anneeId ajouté
+                $exportData = $stmtExport->fetchAll(PDO::FETCH_ASSOC);
+
+                if (empty($exportData)) {
+                    echo json_encode(['success' => false, 'message' => 'Aucune donnée à exporter pour les critères sélectionnés.']);
+                    exit;
+                }
+
+                // Génération du fichier (simplifiée pour l'exemple)
+                $filename_base = "resultats_annee_{$anneeId}_niveau_{$niveauId}_filiere_{$filiereId}";
+                $output = '';
+
+                if ($format === 'excel') {
+                    header('Content-Type: application/vnd.ms-excel');
+                    header("Content-Disposition: attachment; filename=\"{$filename_base}.xls\"");
+                    $output = "Matricule\tNom\tPrénom\tUE\tECUE\tCrédits ECUE\tNote\tDate évaluation\tAppréciation\n"; 
+                    foreach ($exportData as $row) {
+                        $output .= implode("\t", array_values($row)) . "\n";
+                    }
+                } elseif ($format === 'pdf') {
+                    echo json_encode([
+                        'success' => true, 
+                        'message' => "Génération PDF en cours (fonctionnalité complète à implémenter).",
+                        'download_url' => "#" 
+                    ]);
+                    exit;
+                } else {
+                    echo json_encode(['success' => false, 'message' => "Format d'export non supporté."]);
+                    exit;
+                }
+
+                echo $output;
+                exit; 
                 
             default:
                 throw new Exception("Action non reconnue");
@@ -275,10 +341,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <p class="page-subtitle">Analyse et consultation des résultats académiques</p>
                 </div>
 
-                <!-- Message d'alerte -->
                 <div id="alertMessage" class="alert"></div>
 
-                <!-- Formulaire de sélection -->
                 <div class="form-card">
                     <h3 class="form-card-title">Sélection des critères</h3>
                     <div class="form-grid">
@@ -288,23 +352,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             <input type="hidden" id="annee_id" value="<?php echo $anneeActive['id_Ac'] ?? ''; ?>">
                         </div>
                         <div class="form-group">
-                            <label for="niveau_id">Niveau d'étude <span style="color: var(--error-500);">*</span></label>
-                            <select id="niveau_id" name="niveau_id" required>
-                                <option value="">Sélectionner un niveau</option>
-                                <?php foreach ($niveauxEtude as $niveau): ?>
-                                    <option value="<?php echo $niveau['id_niv_etu']; ?>">
-                                        <?php echo htmlspecialchars($niveau['lib_niv_etu']); ?>
+                            <label for="filiere_id">Filière <span style="color: var(--error-500);">*</span></label>
+                            <select id="filiere_id" name="filiere_id" required>
+                                <option value="">Sélectionner une filière</option>
+                                <?php foreach ($filieres as $filiere): ?>
+                                    <option value="<?php echo $filiere['id_filiere']; ?>">
+                                        <?php echo htmlspecialchars($filiere['lib_filiere']); ?>
                                     </option>
                                 <?php endforeach; ?>
                             </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="niveau_id">Niveau d'étude <span style="color: var(--error-500);">*</span></label>
+                            <select id="niveau_id" name="niveau_id" required disabled>
+                                <option value="">Sélectionner un niveau</option>
+                                </select>
                         </div>
                         <div class="form-group">
                             <label for="vue_type">Type de vue</label>
                             <select id="vue_type" name="vue_type">
                                 <option value="synthese">Vue synthèse</option>
                                 <option value="detaillee">Vue détaillée</option>
-                                <option value="statistiques">Statistiques avancées</option>
-                            </select>
+                                </select>
                         </div>
                         <div class="form-group" style="display: flex; align-items: end;">
                             <button type="button" class="btn btn-primary" id="analyserBtn">
@@ -314,7 +383,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 </div>
 
-                <!-- Dashboard statistiques -->
                 <div id="dashboardSection" style="display: none;">
                     <div class="stats-grid">
                         <div class="stat-card primary">
@@ -339,7 +407,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                         </div>
                     </div>
 
-                    <!-- Graphique répartition -->
                     <div class="chart-container">
                         <h3 class="chart-title">Répartition des appréciations</h3>
                         <div class="chart-placeholder" id="chartRepartition">
@@ -349,7 +416,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 </div>
 
-                <!-- Résultats détaillés -->
                 <div class="form-card" id="resultsSection" style="display: none;">
                     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-6);">
                         <h3>Résultats détaillés</h3>
@@ -372,14 +438,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                     <th>Prénom</th>
                                     <th>UE</th>
                                     <th>ECUE</th>
-                                    <th>Note</th>
+                                    <th>Crédits ECUE</th> <th>Note</th>
                                     <th>Date évaluation</th>
                                     <th>Appréciation</th>
                                 </tr>
                             </thead>
                             <tbody>
-                                <!-- Contenu généré dynamiquement -->
-                            </tbody>
+                                </tbody>
                         </table>
                     </div>
                 </div>
@@ -390,6 +455,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     <script>
         // Variables globales
         let currentAnneeId = 0;
+        let currentFiliereId = 0;
         let currentNiveauId = 0;
 
         // Fonctions utilitaires
@@ -420,18 +486,90 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             }
         }
 
+        // Événement pour le changement de filière
+        document.getElementById('filiere_id').addEventListener('change', async function() {
+            const filiereId = this.value;
+            const niveauSelect = document.getElementById('niveau_id');
+            
+            // --- Sauvegarder la valeur actuellement sélectionnée du niveau ---
+            const selectedNiveauBeforeChange = niveauSelect.value;
+            
+            // Réinitialiser les niveaux et désactiver le champ
+            niveauSelect.innerHTML = '<option value="">Sélectionner un niveau</option>';
+            niveauSelect.disabled = true;
+            
+            // Masquer les sections de résultats et de statistiques
+            document.getElementById('dashboardSection').style.display = 'none';
+            document.getElementById('resultsSection').style.display = 'none';
+
+            if (filiereId) {
+                currentFiliereId = filiereId; 
+                try {
+                    const result = await makeAjaxRequest({
+                        action: 'charger_niveaux_par_filiere',
+                        filiere_id: filiereId
+                    });
+                    
+                    if (result.success) {
+                        result.data.forEach(niveau => {
+                            const option = document.createElement('option');
+                            option.value = niveau.id_niv_etu;
+                            option.textContent = htmlspecialchars(niveau.lib_niv_etu);
+                            niveauSelect.appendChild(option);
+                        });
+                        
+                        // --- Tenter de réappliquer la sélection précédente du niveau ---
+                        if (selectedNiveauBeforeChange && Array.from(niveauSelect.options).some(opt => opt.value === selectedNiveauBeforeChange)) {
+                            niveauSelect.value = selectedNiveauBeforeChange;
+                            currentNiveauId = selectedNiveauBeforeChange; // Mettre à jour la variable globale si la sélection est rétablie
+                        } else {
+                            currentNiveauId = 0; // Réinitialiser si l'ancienne sélection n'est plus valide
+                        }
+
+                        niveauSelect.disabled = false; // Activer le champ niveau
+                    } else {
+                        showAlert(result.message, 'error');
+                    }
+                } catch (error) {
+                    showAlert('Erreur lors du chargement des niveaux d\'étude', 'error');
+                }
+            } else {
+                currentFiliereId = 0; 
+                currentNiveauId = 0; 
+            }
+            // Déclencher l'événement 'change' sur le niveau si une valeur a été sélectionnée (pour rafraîchir l'affichage des résultats)
+            if (currentNiveauId) {
+                niveauSelect.dispatchEvent(new Event('change'));
+            }
+        });
+
+        // Événement pour le changement de niveau (pour réinitialiser l'affichage)
+        document.getElementById('niveau_id').addEventListener('change', function() {
+            const niveauId = this.value;
+            if (niveauId) {
+                currentNiveauId = niveauId; // Mettre à jour la variable globale
+            } else {
+                currentNiveauId = 0; // Réinitialiser
+            }
+            // Masquer les sections de résultats et de statistiques lors du changement de niveau
+            document.getElementById('dashboardSection').style.display = 'none';
+            document.getElementById('resultsSection').style.display = 'none';
+        });
+
         // Analyser les résultats
         document.getElementById('analyserBtn').addEventListener('click', async function() {
             const anneeId = document.getElementById('annee_id').value;
+            const filiereId = document.getElementById('filiere_id').value; 
             const niveauId = document.getElementById('niveau_id').value;
             const vueType = document.getElementById('vue_type').value;
             
-            if (!anneeId || !niveauId) {
-                showAlert('Veuillez sélectionner une année et un niveau', 'error');
+            if (!anneeId || !filiereId || !niveauId) { 
+                showAlert('Veuillez sélectionner une année, une filière et un niveau', 'error');
                 return;
             }
             
             currentAnneeId = anneeId;
+            currentFiliereId = filiereId; 
             currentNiveauId = niveauId;
             
             const btn = this;
@@ -441,15 +579,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 btn.innerHTML = '<div class="spinner"></div> Analyse...';
                 btn.disabled = true;
                 
-                // Charger les statistiques
-                await chargerStatistiques(anneeId, niveauId);
+                // Masquer les sections existantes avant de recharger
+                document.getElementById('dashboardSection').style.display = 'none';
+                document.getElementById('resultsSection').style.display = 'none';
+
+                // Charger les statistiques si la vue est 'synthese'
+                if (vueType === 'synthese') {
+                    await chargerStatistiques(anneeId, filiereId, niveauId); 
+                } else {
+                    document.getElementById('dashboardSection').style.display = 'none';
+                }
                 
                 if (vueType === 'detaillee') {
-                    await chargerResultatsDetailles(anneeId, niveauId);
+                    await chargerResultatsDetailles(anneeId, filiereId, niveauId); 
                 }
                 
             } catch (error) {
-                showAlert('Erreur lors de l\'analyse', 'error');
+                showAlert('Erreur lors de l\'analyse: ' + error.message, 'error'); 
             } finally {
                 btn.innerHTML = originalText;
                 btn.disabled = false;
@@ -457,11 +603,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         });
 
         // Charger les statistiques
-        async function chargerStatistiques(anneeId, niveauId) {
+        async function chargerStatistiques(anneeId, filiereId, niveauId) { 
             try {
                 const result = await makeAjaxRequest({
                     action: 'obtenir_statistiques_niveau',
                     annee_id: anneeId,
+                    filiere_id: filiereId, 
                     niveau_id: niveauId
                 });
                 
@@ -479,6 +626,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     // Afficher la répartition (simulation)
                     if (result.repartition && result.repartition.length > 0) {
                         afficherRepartition(result.repartition);
+                    } else {
+                        // Si pas de données de répartition, afficher un message par défaut
+                        document.getElementById('chartRepartition').innerHTML = `
+                            <i class="fas fa-chart-pie" style="font-size: 3rem; color: var(--gray-400);"></i>
+                            <span style="margin-left: var(--space-4);">Aucune donnée de répartition disponible.</span>
+                        `;
                     }
                     
                 } else {
@@ -495,7 +648,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             let total = 0;
             repartition.forEach(item => total += parseInt(item.nombre));
             
-            let html = '<div style="display: flex; justify-content: space-around; align-items: center; height: 100%;">';
+            let html = '<div style="display: flex; flex-wrap: wrap; justify-content: space-around; align-items: center; height: 100%;">';
             
             repartition.forEach(item => {
                 const pourcentage = total > 0 ? ((item.nombre / total) * 100).toFixed(1) : 0;
@@ -507,7 +660,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 }[item.categorie] || 'var(--gray-500)';
                 
                 html += `
-                    <div style="text-align: center;">
+                    <div style="text-align: center; margin: var(--space-3);">
                         <div style="width: 80px; height: 80px; border-radius: 50%; background: ${couleur}; display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1.2rem; margin: 0 auto var(--space-2);">
                             ${item.nombre}
                         </div>
@@ -522,11 +675,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
 
         // Charger les résultats détaillés
-        async function chargerResultatsDetailles(anneeId, niveauId) {
+        async function chargerResultatsDetailles(anneeId, filiereId, niveauId) { 
             try {
                 const result = await makeAjaxRequest({
                     action: 'obtenir_resultats_detailles',
                     annee_id: anneeId,
+                    filiere_id: filiereId, 
                     niveau_id: niveauId
                 });
                 
@@ -546,64 +700,141 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             const tbody = document.querySelector('#resultsTable tbody');
             tbody.innerHTML = '';
             
+            if (resultats.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="9" style="text-align: center; padding: var(--space-8); color: var(--gray-500);">
+                                        <i class="fas fa-search-minus" style="font-size: 2rem; margin-bottom: var(--space-2);"></i><br>
+                                        Aucun résultat trouvé pour cette sélection.
+                                   </td></tr>`;
+                return;
+            }
+
             resultats.forEach(resultat => {
                 const row = document.createElement('tr');
                 const appreciationClass = resultat.appreciation.toLowerCase().replace(' ', '-');
                 
                 row.innerHTML = `
-                    <td><strong>${resultat.num_etu}</strong></td>
-                    <td>${resultat.nom_etu}</td>
-                    <td>${resultat.prenoms_etu}</td>
-                    <td>${resultat.lib_UE || '-'}</td>
-                    <td>${resultat.lib_ECUE || '-'}</td>
-                    <td>${resultat.note ? parseFloat(resultat.note).toFixed(2) : '-'}</td>
+                    <td><strong>${htmlspecialchars(resultat.num_etu)}</strong></td>
+                    <td>${htmlspecialchars(resultat.nom_etu)}</td>
+                    <td>${htmlspecialchars(resultat.prenoms_etu)}</td>
+                    <td>${htmlspecialchars(resultat.lib_UE || '-')}</td>
+                    <td>${htmlspecialchars(resultat.lib_ECUE || '-')}</td>
+                    <td>${htmlspecialchars(resultat.credit_ECUE || '-')}</td> <td>${resultat.note ? parseFloat(resultat.note).toFixed(2) : '-'}</td>
                     <td>${resultat.dte_eval ? new Date(resultat.dte_eval).toLocaleDateString('fr-FR') : '-'}</td>
-                    <td><span class="appreciation-badge ${appreciationClass}">${resultat.appreciation}</span></td>
+                    <td><span class="appreciation-badge ${appreciationClass}">${htmlspecialchars(resultat.appreciation)}</span></td>
                 `;
                 tbody.appendChild(row);
             });
         }
 
         // Export fonctions
-        document.getElementById('exportExcelBtn').addEventListener('click', function() {
-            if (!currentAnneeId || !currentNiveauId) {
-                showAlert('Veuillez d\'abord effectuer une analyse', 'warning');
+        document.getElementById('exportExcelBtn').addEventListener('click', async function() {
+            if (!currentAnneeId || !currentNiveauId || !currentFiliereId) { 
+                showAlert('Veuillez d\'abord effectuer une analyse complète (année, filière, niveau)', 'warning');
                 return;
             }
             
-            makeAjaxRequest({
-                action: 'exporter_resultats',
-                annee_id: currentAnneeId,
-                niveau_id: currentNiveauId,
-                format: 'excel'
-            }).then(result => {
-                if (result.success) {
-                    showAlert(result.message, 'success');
-                } else {
-                    showAlert(result.message, 'error');
-                }
+            const headers = ['Matricule', 'Nom', 'Prénom', 'UE', 'ECUE', 'Crédits ECUE', 'Note', 'Date évaluation', 'Appréciation'];
+            const data = [];
+            document.querySelectorAll('#resultsTable tbody tr').forEach(row => {
+                const rowData = [];
+                row.querySelectorAll('td').forEach((cell, index) => {
+                    if (index === 7) { 
+                        rowData.push(cell.querySelector('.appreciation-badge')?.textContent || cell.textContent);
+                    } else {
+                        rowData.push(cell.textContent);
+                    }
+                });
+                data.push(rowData);
             });
+
+            if (data.length === 0) {
+                showAlert('Aucune donnée à exporter.', 'warning');
+                return;
+            }
+
+            const ws = XLSX.utils.aoa_to_sheet([headers, ...data]);
+            const wb = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(wb, ws, "Résultats Evaluations");
+            const anneeLib = document.getElementById('annee_display').value.replace(' (Active)', '');
+            const filiereLib = document.getElementById('filiere_id').selectedOptions[0]?.textContent || 'Tous';
+            const niveauLib = document.getElementById('niveau_id').selectedOptions[0]?.textContent || 'Tous';
+            const filename = `Resultats_Eval_${filiereLib}_${niveauLib}_${anneeLib}.xlsx`;
+            XLSX.writeFile(wb, filename);
+            showAlert('Exportation Excel réussie!', 'success');
         });
 
-        document.getElementById('exportPdfBtn').addEventListener('click', function() {
-            if (!currentAnneeId || !currentNiveauId) {
-                showAlert('Veuillez d\'abord effectuer une analyse', 'warning');
+
+        document.getElementById('exportPdfBtn').addEventListener('click', async function() {
+            if (!currentAnneeId || !currentNiveauId || !currentFiliereId) { 
+                showAlert('Veuillez d\'abord effectuer une analyse complète (année, filière, niveau)', 'warning');
                 return;
             }
             
-            makeAjaxRequest({
-                action: 'exporter_resultats',
-                annee_id: currentAnneeId,
-                niveau_id: currentNiveauId,
-                format: 'pdf'
-            }).then(result => {
-                if (result.success) {
-                    showAlert(result.message, 'success');
-                } else {
-                    showAlert(result.message, 'error');
-                }
+            const headers = [['Matricule', 'Nom', 'Prénom', 'UE', 'ECUE', 'Crédits', 'Note', 'Date Eval', 'Appréciation']];
+            const data = [];
+            document.querySelectorAll('#resultsTable tbody tr').forEach(row => {
+                 const rowData = [];
+                row.querySelectorAll('td').forEach((cell, index) => {
+                    if (index === 7) { 
+                        rowData.push(cell.querySelector('.appreciation-badge')?.textContent || cell.textContent);
+                    } else {
+                        rowData.push(cell.textContent);
+                    }
+                });
+                data.push(rowData);
             });
+
+            if (data.length === 0) {
+                showAlert('Aucune donnée à exporter.', 'warning');
+                return;
+            }
+
+            const { jsPDF } = window.jspdf;
+            const doc = new jsPDF();
+            
+            doc.setFontSize(18);
+            doc.text("Résultats d'Évaluations", 14, 20);
+            
+            const anneeLib = document.getElementById('annee_display').value.replace(' (Active)', '');
+            const filiereLib = document.getElementById('filiere_id').selectedOptions[0]?.textContent || 'Tous';
+            const niveauLib = document.getElementById('niveau_id').selectedOptions[0]?.textContent || 'Tous';
+            
+            doc.setFontSize(10);
+            doc.text(`Année Académique: ${anneeLib}`, 14, 30);
+            doc.text(`Filière: ${filiereLib}`, 14, 35);
+            doc.text(`Niveau: ${niveauLib}`, 14, 40);
+            doc.text(`Date d'export: ${new Date().toLocaleDateString('fr-FR')}`, 14, 45);
+
+            doc.autoTable({
+                head: headers,
+                body: data,
+                startY: 50,
+                styles: { fontSize: 8, cellPadding: 2, valign: 'middle' },
+                headStyles: { fillColor: [59, 130, 246], textColor: 255, fontStyle: 'bold' },
+                alternateRowStyles: { fillColor: [241, 245, 249] }
+            });
+
+            const filename = `Resultats_Eval_${filiereLib}_${niveauLib}_${anneeLib}.pdf`;
+            doc.save(filename);
+            showAlert('Exportation PDF réussie!', 'success');
         });
+
+        // HTML Escape Function for Security
+        function htmlspecialchars(str) {
+            if (str === null || typeof str === 'undefined') {
+                return '';
+            }
+            str = String(str);
+            var map = {
+                '&': '&amp;',
+                '<': '&lt;',
+                '>': '&gt;',
+                '"': '&quot;',
+                "'": '&#039;'
+            };
+            return str.replace(/[&<>"']/g, function(m) { return map[m]; });
+        }
+
 
         // Initialisation
         document.addEventListener('DOMContentLoaded', function() {
@@ -611,7 +842,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (!anneeId) {
                 showAlert('Aucune année académique active trouvée.', 'warning');
             }
+            // Initialiser les niveaux si une filière est déjà sélectionnée au chargement (peu probable si vide par défaut)
+            const filiereSelect = document.getElementById('filiere_id');
+            if (filiereSelect.value) {
+                filiereSelect.dispatchEvent(new Event('change')); 
+            }
         });
     </script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.28/jspdf.plugin.autotable.min.js"></script>
 </body>
 </html>

@@ -101,19 +101,19 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
                 
             case 'charger_ecue':
-                $ueId = intval($_POST['ue_id'] ?? 0);
+                $ueId = trim($_POST['ue_id'] ?? ''); 
                 
-                if ($ueId <= 0) {
+                if (empty($ueId)) { 
                     throw new Exception("UE non spécifiée");
                 }
                 
                 $stmt = $pdo->prepare("
                     SELECT id_ECUE, lib_ECUE, credit_ECUE 
                     FROM ecue 
-                    WHERE fk_id_UE = ? 
+                    WHERE id_UE = ?  
                     ORDER BY lib_ECUE
                 ");
-                $stmt->execute([$ueId]);
+                $stmt->execute([$ueId]); 
                 $ecues = $stmt->fetchAll(PDO::FETCH_ASSOC);
                 
                 echo json_encode(['success' => true, 'data' => $ecues]);
@@ -226,9 +226,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     SELECT e.*, f.lib_filiere, ne.lib_niv_etu,
                            CONCAT(YEAR(aa.date_deb), '-', YEAR(aa.date_fin)) as annee_libelle
                     FROM etudiant e
+                    LEFT JOIN inscrire i ON e.num_etu = i.fk_num_etu
                     LEFT JOIN filiere f ON e.fk_id_filiere = f.id_filiere
                     LEFT JOIN niveau_etude ne ON e.fk_id_niv_etu = ne.id_niv_etu
-                    LEFT JOIN inscrire i ON e.num_etu = i.fk_num_etu
                     LEFT JOIN année_academique aa ON i.fk_id_Ac = aa.id_Ac
                     WHERE e.num_etu = ? AND aa.id_Ac = ?
                 ");
@@ -244,7 +244,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     SELECT u.lib_UE, ec.lib_ECUE, ec.credit_ECUE, ev.note, ev.dte_eval
                     FROM evaluer ev
                     INNER JOIN ecue ec ON ev.fk_id_ECUE = ec.id_ECUE
-                    INNER JOIN ue u ON ec.fk_id_UE = u.id_UE
+                    INNER JOIN ue u ON ec.id_UE = u.id_UE 
                     WHERE ev.fk_num_etu = ? AND ev.fk_id_Ac = ?
                     ORDER BY u.lib_UE, ec.lib_ECUE
                 ");
@@ -328,7 +328,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .nav-section-title { padding: var(--space-2) var(--space-6); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--primary-400); white-space: nowrap; opacity: 1; transition: opacity var(--transition-normal); } .sidebar.collapsed .nav-section-title { opacity: 0; }
         .nav-item { margin-bottom: var(--space-1); }
         .nav-link { display: flex; align-items: center; padding: var(--space-3) var(--space-6); color: var(--primary-200); text-decoration: none; transition: all var(--transition-fast); position: relative; gap: var(--space-3); }
-        .nav-link:hover { background: rgba(255, 255, 255, 0.1); color: white; }
+        .nav-link:hover { background: rgba(255, 255, 0, 0.1); color: white; }
         .nav-link.active { background: var(--accent-600); color: white; }
         .nav-link.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent-300); }
         .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
@@ -706,7 +706,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         });
 
         document.getElementById('ue_id').addEventListener('change', async function() {
-            const ueId = this.value;
+            const ueId = this.value; // UE ID is VARCHAR
             const ecueSelect = document.getElementById('ecue_id');
             
             ecueSelect.innerHTML = '<option value="">Sélectionner une ECUE</option>';
@@ -718,7 +718,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 try {
                     const result = await makeAjaxRequest({
                         action: 'charger_ecue',
-                        ue_id: ueId
+                        ue_id: ueId // Pass VARCHAR UE ID
                     });
                     
                     if (result.success) {
@@ -728,7 +728,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                             option.textContent = `${htmlspecialchars(ecue.lib_ECUE)} (${ecue.credit_ECUE} crédits)`;
                             ecueSelect.appendChild(option);
                         });
-                        ecueSelect.disabled = false;
+                        ecueSelect.disabled = false; // <<<----- MODIFICATION ICI
                     }
                 } catch (error) {
                     showAlert('Erreur lors du chargement des ECUE', 'error');
@@ -744,7 +744,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             if (ecueId) {
                 currentEcueId = ecueId;
                 // We need to re-render the *current page* of students with their notes
-                await chargerNotesEcue(currentAnneeId, currentNiveauId, ecueId);
+                await chargerNotesEcue(currentAnneeId, currentNiveauId, currentEcueId);
             } else {
                 viderColonnesNotes();
             }
@@ -936,13 +936,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         function remplirColonnesNotes(notesData) {
             const rows = document.querySelectorAll('#studentsTable tbody tr');
+            const today = new Date().toISOString().slice(0, 10); // Current date in YYYY-MM-DD format
             
             rows.forEach(row => {
                 const matricule = row.cells[0].textContent.trim();
                 const noteData = notesData[matricule] || {};
                 
                 const note = noteData.note || '';
-                const dateEval = noteData.dte_eval || '';
+                const dateEval = noteData.dte_eval || today; // Set default to today's date
                 const idEval = noteData.id_eval || 0;
                 const appreciation = getAppreciation(noteData.note);
                 

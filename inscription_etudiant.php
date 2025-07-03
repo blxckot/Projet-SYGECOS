@@ -6,13 +6,13 @@ if (!isLoggedIn()) {
     redirect('loginForm.php'); // Redirige si l'utilisateur n'est pas connecté
 }
 
-// Récupérer les années académiques pour la liste déroulante
-$anneesAcademiques = [];
+// Récupérer l'année académique active
+$anneeAcademiqueActive = null;
 try {
-    $stmt = $pdo->query("SELECT id_Ac, CONCAT(YEAR(date_deb), '-', YEAR(date_fin)) as annee_libelle, date_deb, date_fin FROM année_academique ORDER BY date_deb DESC");
-    $anneesAcademiques = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    $stmt = $pdo->query("SELECT id_Ac, CONCAT(YEAR(date_deb), '-', YEAR(date_fin)) as annee_libelle, date_deb, date_fin FROM année_academique WHERE est_courante = 1 LIMIT 1");
+    $anneeAcademiqueActive = $stmt->fetch(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
-    error_log("Erreur de récupération des années académiques: " . $e->getMessage());
+    error_log("Erreur de récupération de l'année académique active: " . $e->getMessage());
     // Gérer l'erreur, par exemple, afficher un message à l'utilisateur
 }
 
@@ -25,147 +25,152 @@ try {
     error_log("Erreur de récupération des filières: " . $e->getMessage());
 }
 
-// Récupérer les niveaux pour la liste déroulante (de la table 'niveau_etude')
-$niveauxEtude = [];
-try {
-    $stmt = $pdo->query("SELECT id_niv_etu, lib_niv_etu FROM niveau_etude ORDER BY lib_niv_etu ASC");
-    $niveauxEtude = $stmt->fetchAll(PDO::FETCH_ASSOC);
-} catch (PDOException $e) {
-    error_log("Erreur de récupération des niveaux d'étude: " . $e->getMessage());
-}
-
-
-// Traitement AJAX pour l'ajout d'un étudiant
-if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'ajouter_etudiant') {
+// Traitement AJAX pour l'ajout d'un étudiant ou pour récupérer les niveaux par filière
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     header('Content-Type: application/json');
-    
-    $nom = trim($_POST['nom']);
-    $prenom = trim($_POST['prenom']);
-    $dateNaissance = $_POST['date_naissance'];
-    $lieuNaissance = trim($_POST['lieu_naissance']);
-    $email = trim($_POST['email']);
-    $telephone = trim($_POST['telephone']);
-    $niveauId = trim($_POST['niveau']);   // Maintenant c'est l'ID du niveau
-    $filiereId = trim($_POST['filiere']); // Maintenant c'est l'ID de la filière
-    $anneeAcademiqueId = $_POST['annee_academique'];
+
+    $action = $_POST['action'] ?? '';
 
     try {
         $pdo->beginTransaction();
 
-        // --- Validation côté serveur ---
-        if (empty($nom) || empty($prenom) || empty($dateNaissance) || empty($email) || empty($niveauId) || empty($filiereId) || empty($anneeAcademiqueId)) {
-            throw new Exception("Tous les champs obligatoires (Nom, Prénom, Date de naissance, Email, Niveau, Filière, Année Académique) doivent être remplis.");
-        }
-        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-            throw new Exception("Format d'email invalide.");
-        }
+        switch ($action) {
+            case 'ajouter_etudiant':
+                $nom = trim($_POST['nom']);
+                $prenom = trim($_POST['prenom']);
+                $dateNaissance = $_POST['date_naissance'];
+                $lieuNaissance = trim($_POST['lieu_naissance']);
+                $email = trim($_POST['email']);
+                $telephone = trim($_POST['telephone']);
+                $niveauId = trim($_POST['niveau']);
+                $filiereId = trim($_POST['filiere']);
+                $anneeAcademiqueId = $_POST['annee_academique_id']; // Récupéré du champ caché ou désactivé
 
-        // Vérifier l'âge minimum de 14 ans
-        $stmtAnnee = $pdo->prepare("SELECT date_deb FROM année_academique WHERE id_Ac = ?");
-        $stmtAnnee->execute([$anneeAcademiqueId]);
-        $anneeAcademiqueInfo = $stmtAnnee->fetch(PDO::FETCH_ASSOC);
+                // --- Validation côté serveur ---
+                if (empty($nom) || empty($prenom) || empty($dateNaissance) || empty($email) || empty($niveauId) || empty($filiereId) || empty($anneeAcademiqueId)) {
+                    throw new Exception("Tous les champs obligatoires (Nom, Prénom, Date de naissance, Email, Niveau, Filière, Année Académique) doivent être remplis.");
+                }
+                if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                    throw new Exception("Format d'email invalide.");
+                }
 
-        if (!$anneeAcademiqueInfo) {
-            throw new Exception("Année académique sélectionnée introuvable.");
-        }
+                // Vérifier l'âge minimum de 14 ans
+                $stmtAnnee = $pdo->prepare("SELECT date_deb FROM année_academique WHERE id_Ac = ?");
+                $stmtAnnee->execute([$anneeAcademiqueId]);
+                $anneeAcademiqueInfo = $stmtAnnee->fetch(PDO::FETCH_ASSOC);
 
-        $anneeAcademiqueDebut = new DateTime($anneeAcademiqueInfo['date_deb']);
-        $dateNaiss = new DateTime($dateNaissance);
-        $diff = $dateNaiss->diff($anneeAcademiqueDebut);
-        $age = $diff->y;
+                if (!$anneeAcademiqueInfo) {
+                    throw new Exception("Année académique sélectionnée introuvable ou non valide.");
+                }
 
-        if ($age < 14 || ($age == 14 && $dateNaiss->format('m-d') > $anneeAcademiqueDebut->format('m-d'))) {
-            throw new Exception("L'étudiant doit avoir au moins 14 ans au début de l'année académique sélectionnée.");
-        }
-        
-        // Vérifier si l'email existe déjà pour un autre utilisateur (étudiant, enseignant ou personnel)
-        $checkEmailStmt = $pdo->prepare("
-            SELECT COUNT(*) as total FROM (
-                SELECT email_etu as email FROM etudiant WHERE email_etu = ?
-                UNION ALL
-                SELECT email FROM enseignant WHERE email = ?
-                UNION ALL
-                SELECT email_pers as email FROM personnel_admin WHERE email_pers = ?
-            ) as emails
-        ");
-        $checkEmailStmt->execute([$email, $email, $email]);
-        $emailExists = $checkEmailStmt->fetch(PDO::FETCH_ASSOC)['total'];
-        
-        if ($emailExists > 0) {
-            throw new Exception("Cet email est déjà utilisé par un autre utilisateur (étudiant, enseignant ou personnel).");
-        }
+                $anneeAcademiqueDebut = new DateTime($anneeAcademiqueInfo['date_deb']);
+                $dateNaiss = new DateTime($dateNaissance);
+                $diff = $dateNaiss->diff($anneeAcademiqueDebut);
+                $age = $diff->y;
 
-        // Générer un numéro étudiant selon le format : 3 lettres nom + 3 lettres prénom + date (JJMMAA)
-        $nomCode = strtoupper(substr(str_replace(' ', '', $nom), 0, 3));
-        $prenomCode = strtoupper(substr(str_replace(' ', '', $prenom), 0, 3));
-        $dateCode = date('dmy', strtotime($dateNaissance)); // JJMMAA
-        $numEtu = $nomCode . $prenomCode . $dateCode;
-        
-        // Vérifier si ce numéro existe déjà, si oui ajouter un suffixe
-        $counter = 1;
-        $originalNumEtu = $numEtu;
-        while (true) {
-            $checkNumStmt = $pdo->prepare("SELECT COUNT(*) FROM etudiant WHERE num_etu = ?");
-            $checkNumStmt->execute([$numEtu]);
-            if ($checkNumStmt->fetchColumn() == 0) {
+                if ($age < 14 || ($age == 14 && $dateNaiss->format('m-d') > $anneeAcademiqueDebut->format('m-d'))) {
+                    throw new Exception("L'étudiant doit avoir au moins 14 ans au début de l'année académique sélectionnée.");
+                }
+
+                // Vérifier si l'email existe déjà pour un autre utilisateur (étudiant, enseignant ou personnel)
+                $checkEmailStmt = $pdo->prepare("
+                    SELECT COUNT(*) as total FROM (
+                        SELECT email_etu as email FROM etudiant WHERE email_etu = ?
+                        UNION ALL
+                        SELECT email FROM enseignant WHERE email = ?
+                        UNION ALL
+                        SELECT email_pers as email FROM personnel_admin WHERE email_pers = ?
+                    ) as emails
+                ");
+                $checkEmailStmt->execute([$email, $email, $email]);
+                $emailExists = $checkEmailStmt->fetch(PDO::FETCH_ASSOC)['total'];
+
+                if ($emailExists > 0) {
+                    throw new Exception("Cet email est déjà utilisé par un autre utilisateur (étudiant, enseignant ou personnel).");
+                }
+
+                // Générer un numéro étudiant selon le format : 3 lettres nom + 3 lettres prénom + date (JJMMAA)
+                $nomCode = strtoupper(substr(str_replace(' ', '', $nom), 0, 3));
+                $prenomCode = strtoupper(substr(str_replace(' ', '', $prenom), 0, 3));
+                $dateCode = date('dmy', strtotime($dateNaissance)); // JJMMAA
+                $numEtu = $nomCode . $prenomCode . $dateCode;
+
+                // Vérifier si ce numéro existe déjà, si oui ajouter un suffixe
+                $counter = 1;
+                $originalNumEtu = $numEtu;
+                while (true) {
+                    $checkNumStmt = $pdo->prepare("SELECT COUNT(*) FROM etudiant WHERE num_etu = ?");
+                    $checkNumStmt->execute([$numEtu]);
+                    if ($checkNumStmt->fetchColumn() == 0) {
+                        break;
+                    }
+                    $numEtu = $originalNumEtu . $counter;
+                    $counter++;
+                }
+
+                // Récupérer le libellé du niveau et de la filière pour le message de succès
+                $stmtLibNiveau = $pdo->prepare("SELECT lib_niv_etu FROM niveau_etude WHERE id_niv_etu = ?");
+                $stmtLibNiveau->execute([$niveauId]);
+                $libNiveau = $stmtLibNiveau->fetchColumn();
+
+                $stmtLibFiliere = $pdo->prepare("SELECT lib_filiere FROM filiere WHERE id_filiere = ?");
+                $stmtLibFiliere->execute([$filiereId]);
+                $libFiliere = $stmtLibFiliere->fetchColumn();
+
+                // 1. GÉNÉRER LES IDs
+                $stmtMaxUtil = $pdo->query("SELECT COALESCE(MAX(id_util), 0) + 1 FROM utilisateur");
+                $idUtil = $stmtMaxUtil->fetchColumn();
+
+                // 2. CRÉER L'UTILISATEUR D'ABORD (avec login et mot de passe null)
+                $stmtUser = $pdo->prepare("
+                    INSERT INTO utilisateur (id_util, login_util, mdp_util, last_activity)
+                    VALUES (?, ?, ?, NOW())
+                ");
+                $stmtUser->execute([$idUtil, null, null]);
+
+                // 3. Insérer dans la table `etudiant` AVEC l'ID utilisateur
+                $stmtEtu = $pdo->prepare("INSERT INTO etudiant (num_etu, fk_id_util, nom_etu, prenoms_etu, dte_naiss_etu, email_etu, lieu_naissance, telephone, fk_id_filiere, fk_id_niv_etu) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
+                $stmtEtu->execute([$numEtu, $idUtil, $nom, $prenom, $dateNaissance, $email, $lieuNaissance, $telephone, $filiereId, $niveauId]);
+
+                // 4. Insérer l'inscription dans la table inscrire
+                $stmtMaxInsc = $pdo->query("SELECT COALESCE(MAX(id_insc), 0) + 1 as next_id FROM inscrire");
+                $idInsc = $stmtMaxInsc->fetch(PDO::FETCH_ASSOC)['next_id'];
+
+                $stmtInsc = $pdo->prepare("INSERT INTO inscrire (id_insc, fk_num_etu, fk_id_Ac, fk_id_niv_etu, dte_insc, montant_insc) VALUES (?, ?, ?, ?, ?, ?)");
+                $stmtInsc->execute([$idInsc, $numEtu, $anneeAcademiqueId, $niveauId, date('Y-m-d'), 0]);
+
+                $pdo->commit();
+
+                echo json_encode([
+                    'success' => true,
+                    'message' => "Étudiant {$prenom} {$nom} enregistré avec succès ! Son numéro étudiant est : {$numEtu}.",
+                    'data' => [
+                        'num_etu' => $numEtu,
+                        'nom_etu' => $nom,
+                        'prenoms_etu' => $prenom,
+                        'email_etu' => $email,
+                        'annee_academique' => $anneeAcademiqueId,
+                        'niveau_id' => $niveauId,
+                        'lib_niveau' => $libNiveau,
+                        'filiere_id' => $filiereId,
+                        'lib_filiere' => $libFiliere,
+                        'has_credentials' => false
+                    ]
+                ]);
+
                 break;
-            }
-            $numEtu = $originalNumEtu . $counter;
-            $counter++;
+
+            case 'get_niveaux_by_filiere':
+                $filiereId = $_POST['filiere_id'];
+                $stmt = $pdo->prepare("SELECT id_niv_etu, lib_niv_etu FROM niveau_etude WHERE fk_id_filiere = ? ORDER BY lib_niv_etu ASC");
+                $stmt->execute([$filiereId]);
+                $niveaux = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                echo json_encode(['success' => true, 'niveaux' => $niveaux]);
+                break;
+
+            default:
+                throw new Exception("Action non reconnue.");
         }
-
-        // Récupérer le libellé du niveau et de la filière pour le message de succès
-        $stmtLibNiveau = $pdo->prepare("SELECT lib_niv_etu FROM niveau_etude WHERE id_niv_etu = ?");
-        $stmtLibNiveau->execute([$niveauId]);
-        $libNiveau = $stmtLibNiveau->fetchColumn();
-
-        $stmtLibFiliere = $pdo->prepare("SELECT lib_filiere FROM filiere WHERE id_filiere = ?");
-        $stmtLibFiliere->execute([$filiereId]);
-        $libFiliere = $stmtLibFiliere->fetchColumn();
-
-        // ========== CORRECTION : GÉRER fk_id_util NOT NULL ==========
-        // 1. GÉNÉRER LES IDs (comme dans votre code personnel admin)
-        $stmtMaxUtil = $pdo->query("SELECT COALESCE(MAX(id_util), 0) + 1 FROM utilisateur");
-        $idUtil = $stmtMaxUtil->fetchColumn();
-        
-        // 2. CRÉER L'UTILISATEUR D'ABORD (avec login et mot de passe null)
-        // Ceci garantit que fk_id_util ne sera jamais null
-        $stmtUser = $pdo->prepare("
-            INSERT INTO utilisateur (id_util, login_util, mdp_util, last_activity) 
-            VALUES (?, ?, ?, NOW())
-        ");
-        $stmtUser->execute([$idUtil, null, null]);
-
-        // 3. Insérer dans la table `etudiant` AVEC l'ID utilisateur
-        $stmtEtu = $pdo->prepare("INSERT INTO etudiant (num_etu, fk_id_util, nom_etu, prenoms_etu, dte_naiss_etu, email_etu, lieu_naissance, telephone, fk_id_filiere, fk_id_niv_etu) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
-        $stmtEtu->execute([$numEtu, $idUtil, $nom, $prenom, $dateNaissance, $email, $lieuNaissance, $telephone, $filiereId, $niveauId]);
-
-        // 4. Insérer l'inscription dans la table inscrire (optionnel, selon votre logique métier)
-        $stmtMaxInsc = $pdo->query("SELECT COALESCE(MAX(id_insc), 0) + 1 as next_id FROM inscrire");
-        $idInsc = $stmtMaxInsc->fetch(PDO::FETCH_ASSOC)['next_id'];
-        
-        $stmtInsc = $pdo->prepare("INSERT INTO inscrire (id_insc, fk_num_etu, fk_id_Ac, fk_id_niv_etu, dte_insc, montant_insc) VALUES (?, ?, ?, ?, ?, ?)");
-        $stmtInsc->execute([$idInsc, $numEtu, $anneeAcademiqueId, $niveauId, date('Y-m-d'), 0]);
-
-        $pdo->commit();
-        
-        echo json_encode([
-            'success' => true,
-            'message' => "Étudiant {$prenom} {$nom} enregistré avec succès ! Son numéro étudiant est : {$numEtu}.",
-            'data' => [
-                'num_etu' => $numEtu,
-                'nom_etu' => $nom,
-                'prenoms_etu' => $prenom,
-                'email_etu' => $email,
-                'annee_academique' => $anneeAcademiqueId,
-                'niveau_id' => $niveauId,
-                'lib_niveau' => $libNiveau,
-                'filiere_id' => $filiereId,
-                'lib_filiere' => $libFiliere,
-                'has_credentials' => false // Indique que l'étudiant n'a pas encore d'identifiants générés
-            ]
-        ]);
-
     } catch (Exception $e) {
         $pdo->rollBack();
         echo json_encode(['success' => false, 'message' => 'Erreur lors de l\'enregistrement : ' . $e->getMessage()]);
@@ -289,23 +294,23 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                     <p class="page-subtitle">Formulaire d'inscription d'un nouvel étudiant</p>
                 </div>
 
-                <!-- Message d'alerte -->
                 <div id="alertMessage" class="alert"></div>
 
                 <div class="form-card">
                     <form id="inscriptionForm">
                         <div class="form-grid">
-                            <!-- Année Académique -->
                             <div class="form-group">
-                                <label for="annee_academique">Année Académique <span style="color: var(--error-500);">*</span></label>
-                                <select id="annee_academique" name="annee_academique" required>
-                                    <option value="">Sélectionner l'année académique</option>
-                                    <?php foreach ($anneesAcademiques as $annee): ?>
-                                        <option value="<?php echo htmlspecialchars($annee['id_Ac']); ?>" data-date-deb="<?php echo htmlspecialchars($annee['date_deb']); ?>">
-                                            <?php echo htmlspecialchars($annee['annee_libelle']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
+                                <label for="annee_academique_display">Année Académique Courante <span style="color: var(--error-500);">*</span></label>
+                                <?php if ($anneeAcademiqueActive): ?>
+                                    <input type="text" id="annee_academique_display" value="<?php echo htmlspecialchars($anneeAcademiqueActive['annee_libelle']); ?>" disabled>
+                                    <input type="hidden" id="annee_academique_id" name="annee_academique_id" value="<?php echo htmlspecialchars($anneeAcademiqueActive['id_Ac']); ?>">
+                                    <input type="hidden" id="annee_academique_date_deb" value="<?php echo htmlspecialchars($anneeAcademiqueActive['date_deb']); ?>">
+                                <?php else: ?>
+                                    <input type="text" id="annee_academique_display" value="Aucune année active trouvée" disabled style="color: var(--error-500);">
+                                    <input type="hidden" id="annee_academique_id" name="annee_academique_id" value="">
+                                    <input type="hidden" id="annee_academique_date_deb" value="">
+                                    <p style="color: var(--error-500); font-size: var(--text-sm); margin-top: var(--space-2);">Veuillez activer une année académique dans la gestion des années.</p>
+                                <?php endif; ?>
                             </div>
 
                             <div class="form-group">
@@ -333,17 +338,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                 <input type="tel" id="telephone" name="telephone" placeholder="Ex: 0707123456">
                             </div>
                             <div class="form-group">
-                                <label for="niveau">Niveau d'étude <span style="color: var(--error-500);">*</span></label>
-                                <select id="niveau" name="niveau" required>
-                                    <option value="">Sélectionner un niveau</option>
-                                    <?php foreach ($niveauxEtude as $niveau): ?>
-                                        <option value="<?php echo htmlspecialchars($niveau['id_niv_etu']); ?>">
-                                            <?php echo htmlspecialchars($niveau['lib_niv_etu']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
-                            </div>
-                            <div class="form-group">
                                 <label for="filiere">Filière <span style="color: var(--error-500);">*</span></label>
                                 <select id="filiere" name="filiere" required>
                                     <option value="">Sélectionner une filière</option>
@@ -353,6 +347,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
                                         </option>
                                     <?php endforeach; ?>
                                 </select>
+                            </div>
+                             <div class="form-group">
+                                <label for="niveau">Niveau d'étude <span style="color: var(--error-500);">*</span></label>
+                                <select id="niveau" name="niveau" required disabled> <option value="">Sélectionner un niveau</option>
+                                    </select>
                             </div>
                         </div>
                         <div class="form-actions">
@@ -374,213 +373,228 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
         const inscriptionForm = document.getElementById('inscriptionForm');
         const alertMessageDiv = document.getElementById('alertMessage');
         const submitBtn = document.getElementById('submitBtn');
-        const anneeAcademiqueSelect = document.getElementById('annee_academique');
-        const dateNaissanceInput = document.getElementById('date_naissance');
-        const niveauSelect = document.getElementById('niveau');
-        const filiereSelect = document.getElementById('filiere');
+        const anneeAcademiqueIdInput = document.getElementById('annee_academique_id'); // Hidden input for ID
+        const anneeAcademiqueDateDebInput = document.getElementById('annee_academique_date_deb'); // Hidden input for date_deb
+        const dateNaissanceInput = document.getElementById('date_naissance'); //
+        const niveauSelect = document.getElementById('niveau'); //
+        const filiereSelect = document.getElementById('filiere'); //
 
         // Fonctions pour gérer la sidebar (si elle existe)
         const sidebarToggle = document.getElementById('sidebarToggle');
         const sidebar = document.getElementById('sidebar');
         const mainContent = document.getElementById('mainContent');
 
-        if (sidebarToggle) {
-            sidebarToggle.addEventListener('click', function() {
-                sidebar.classList.toggle('collapsed');
-                mainContent.classList.toggle('sidebar-collapsed');
+        if (sidebarToggle) { //
+            sidebarToggle.addEventListener('click', function() { //
+                sidebar.classList.toggle('collapsed'); //
+                mainContent.classList.toggle('sidebar-collapsed'); //
             });
         }
 
         // Fonction pour afficher les messages d'alerte
-        function showAlert(message, type = 'info') {
-            alertMessageDiv.textContent = message;
-            alertMessageDiv.className = `alert ${type}`;
-            alertMessageDiv.style.display = 'block';
-            setTimeout(() => {
-                alertMessageDiv.style.display = 'none';
+        function showAlert(message, type = 'info') { //
+            alertMessageDiv.textContent = message; //
+            alertMessageDiv.className = `alert ${type}`; //
+            alertMessageDiv.style.display = 'block'; //
+            setTimeout(() => { //
+                alertMessageDiv.style.display = 'none'; //
             }, 5000); // Durée d'affichage du message
         }
 
-        // Fonction pour faire une requête AJAX
-        async function makeAjaxRequest(data) {
-            try {
-                const response = await fetch(window.location.href, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/x-www-form-urlencoded',
+        // Fonction pour faire une requête AJAX (modifiée pour URLSearchParams)
+        async function makeAjaxRequest(data) { //
+            try { //
+                const response = await fetch(window.location.href, { //
+                    method: 'POST', //
+                    headers: { //
+                        'Content-Type': 'application/x-www-form-urlencoded', //
                     },
-                    body: new URLSearchParams(data)
+                    body: new URLSearchParams(data).toString() //
                 });
-                return await response.json();
-            } catch (error) {
-                console.error('Erreur AJAX:', error);
-                throw error;
+                return await response.json(); //
+            } catch (error) { //
+                console.error('Erreur AJAX:', error); //
+                throw error; //
             }
         }
 
-        // Pré-remplir la filière et le niveau au chargement de la page
-        document.addEventListener('DOMContentLoaded', () => {
-            // Trouver l'ID du niveau "M2"
-            const m2Option = Array.from(niveauSelect.options).find(option => option.textContent === 'M2');
-            if (m2Option) {
-                niveauSelect.value = m2Option.value; // Pré-rempli à M2
-            } else {
-                console.warn("Le niveau 'M2' n'est pas disponible dans la base de données. Veuillez l'ajouter via l'interface de gestion des niveaux.");
+        // Fonction pour charger les niveaux d'étude en fonction de la filière sélectionnée
+        async function loadNiveauxByFiliere(filiereId) { //
+            niveauSelect.innerHTML = '<option value="">Chargement des niveaux...</option>'; //
+            niveauSelect.disabled = true; //
+
+            if (!filiereId) { //
+                niveauSelect.innerHTML = '<option value="">Sélectionner un niveau</option>'; //
+                return; //
             }
-            
-            // Trouver l'ID de la filière "MIAGE"
-            const miageOption = Array.from(filiereSelect.options).find(option => option.textContent === 'MIAGE');
-            if (miageOption) {
-                filiereSelect.value = miageOption.value; // Pré-rempli à MIAGE
-            } else {
-                console.warn("La filière 'MIAGE' n'est pas disponible dans la base de données. Veuillez l'ajouter via l'interface de gestion des filières.");
+
+            try { //
+                const result = await makeAjaxRequest({ //
+                    action: 'get_niveaux_by_filiere', //
+                    filiere_id: filiereId //
+                });
+
+                if (result.success) { //
+                    niveauSelect.innerHTML = '<option value="">Sélectionner un niveau</option>'; //
+                    if (result.niveaux.length > 0) { //
+                        result.niveaux.forEach(niveau => { //
+                            const option = document.createElement('option'); //
+                            option.value = niveau.id_niv_etu; //
+                            option.textContent = niveau.lib_niv_etu; //
+                            niveauSelect.appendChild(option); //
+                        });
+                        niveauSelect.disabled = false; //
+                    } else {
+                        niveauSelect.innerHTML = '<option value="">Aucun niveau disponible pour cette filière</option>'; //
+                    }
+                } else {
+                    showAlert(result.message || 'Erreur lors du chargement des niveaux.', 'error'); //
+                    niveauSelect.innerHTML = '<option value="">Erreur de chargement</option>'; //
+                }
+            } catch (error) { //
+                showAlert('Erreur réseau lors du chargement des niveaux.', 'error'); //
+                niveauSelect.innerHTML = '<option value="">Erreur réseau</option>'; //
             }
+        }
+
+        // Écouteur d'événement pour le changement de filière
+        filiereSelect.addEventListener('change', function() { //
+            loadNiveauxByFiliere(this.value); //
         });
 
         // Validation côté client et soumission du formulaire
-        inscriptionForm.addEventListener('submit', async function(e) {
-            e.preventDefault();
+        inscriptionForm.addEventListener('submit', async function(e) { //
+            e.preventDefault(); //
 
             // Réinitialiser les messages d'alerte
-            showAlert('', 'info');
+            showAlert('', 'info'); //
 
             // Récupérer les données du formulaire
             const formData = new FormData(this);
-            const nom = formData.get('nom');
-            const prenom = formData.get('prenom');
-            const dateNaissance = formData.get('date_naissance');
-            const email = formData.get('email');
-            const anneeAcademiqueId = formData.get('annee_academique');
+            const nom = formData.get('nom'); //
+            const prenom = formData.get('prenom'); //
+            const dateNaissance = formData.get('date_naissance'); //
+            const email = formData.get('email'); //
+            const anneeAcademiqueId = anneeAcademiqueIdInput.value; // Get value from hidden input
             const niveauId = formData.get('niveau');   // ID du niveau sélectionné
             const filiereId = formData.get('filiere'); // ID de la filière sélectionnée
 
             // --- Validation côté client ---
-            if (!anneeAcademiqueId) {
-                showAlert('Veuillez sélectionner une année académique.', 'error');
-                anneeAcademiqueSelect.focus();
+            if (!anneeAcademiqueId) { //
+                showAlert('Aucune année académique active n\'est définie. L\'inscription n\'est pas possible.', 'error');
                 return;
             }
-            if (!nom || !prenom || !dateNaissance || !email || !niveauId || !filiereId) {
-                showAlert('Veuillez remplir tous les champs obligatoires.', 'error');
+            if (!nom || !prenom || !dateNaissance || !email || !niveauId || !filiereId) { //
+                showAlert('Veuillez remplir tous les champs obligatoires.', 'error'); //
                 return;
             }
-            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-                showAlert('Format d\'email invalide.', 'error');
-                document.getElementById('email').focus();
-                return;
+            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) { //
+                showAlert('Format d\'email invalide.', 'error'); //
+                document.getElementById('email').focus(); //
+                return; //
             }
 
             // Validation de l'âge
-            const selectedOption = anneeAcademiqueSelect.options[anneeAcademiqueSelect.selectedIndex];
-            const anneeAcademiqueDebutStr = selectedOption.dataset.dateDeb;
+            const anneeAcademiqueDebutStr = anneeAcademiqueDateDebInput.value; // Get date_deb from hidden input
 
-            if (anneeAcademiqueDebutStr) {
-                const anneeAcademiqueDebut = new Date(anneeAcademiqueDebutStr);
-                const dateNaiss = new Date(dateNaissance);
+            if (anneeAcademiqueDebutStr) { //
+                const anneeAcademiqueDebut = new Date(anneeAcademiqueDebutStr); //
+                const dateNaiss = new Date(dateNaissance); //
 
-                let age = anneeAcademiqueDebut.getFullYear() - dateNaiss.getFullYear();
-                const m = anneeAcademiqueDebut.getMonth() - dateNaiss.getMonth();
-                if (m < 0 || (m === 0 && anneeAcademiqueDebut.getDate() < dateNaiss.getDate())) {
-                    age--;
+                // Calcul de l'âge plus précis
+                let age = anneeAcademiqueDebut.getFullYear() - dateNaiss.getFullYear(); //
+                const m = anneeAcademiqueDebut.getMonth() - dateNaiss.getMonth(); //
+                const d = anneeAcademiqueDebut.getDate() - dateNaiss.getDate(); //
+                if (m < 0 || (m === 0 && d < 0)) { //
+                    age--; //
                 }
 
-                if (age < 14) {
-                    showAlert('L\'étudiant doit avoir au moins 14 ans au début de l\'année académique sélectionnée.', 'error');
-                    dateNaissanceInput.focus();
-                    return;
+                if (age < 14) { //
+                    showAlert('L\'étudiant doit avoir au moins 14 ans au début de l\'année académique sélectionnée.', 'error'); //
+                    dateNaissanceInput.focus(); //
+                    return; //
                 }
             } else {
-                showAlert('Impossible de valider l\'âge : Année académique de début introuvable.', 'warning');
+                showAlert('Impossible de valider l\'âge : Année académique de début introuvable.', 'warning'); //
+                return; //
             }
 
             // Désactiver le bouton de soumission et afficher l'état de chargement
-            submitBtn.classList.add('loading');
-            submitBtn.disabled = true;
-            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enregistrement...';
+            submitBtn.classList.add('loading'); //
+            submitBtn.disabled = true; //
+            submitBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Enregistrement...'; //
 
             const dataToSend = {
-                action: 'ajouter_etudiant',
-                nom: nom,
-                prenom: prenom,
-                date_naissance: dateNaissance,
-                lieu_naissance: formData.get('lieu_naissance'),
-                email: email,
-                telephone: formData.get('telephone'),
+                action: 'ajouter_etudiant', //
+                nom: nom, //
+                prenom: prenom, //
+                date_naissance: dateNaissance, //
+                lieu_naissance: formData.get('lieu_naissance'), //
+                email: email, //
+                telephone: formData.get('telephone'), //
                 niveau: niveauId,   // Envoie l'ID du niveau
                 filiere: filiereId, // Envoie l'ID de la filière
-                annee_academique: anneeAcademiqueId
+                annee_academique_id: anneeAcademiqueId // Envoie l'ID de l'année académique active
             };
 
-            try {
-                const result = await makeAjaxRequest(dataToSend);
+            try { //
+                const result = await makeAjaxRequest(dataToSend); //
 
-                if (result.success) {
-                    showAlert(result.message, 'success');
-                    inscriptionForm.reset();
-                    // Réinitialiser les champs pré-remplis après le reset du formulaire
-                    // Retrouver les options par leur texte pour les sélectionner à nouveau
-                    const m2Option = Array.from(niveauSelect.options).find(option => option.textContent === 'M2');
-                    if (m2Option) {
-                        niveauSelect.value = m2Option.value;
-                    } else {
-                        niveauSelect.value = ''; // ou valeur par défaut si M2 n'existe pas
-                    }
-                    const miageOption = Array.from(filiereSelect.options).find(option => option.textContent === 'MIAGE');
-                    if (miageOption) {
-                        filiereSelect.value = miageOption.value;
-                    } else {
-                        filiereSelect.value = ''; // ou valeur par défaut si MIAGE n'existe pas
-                    }
-                    anneeAcademiqueSelect.value = ''; // Efface l'année académique sélectionnée
+                if (result.success) { //
+                    showAlert(result.message, 'success'); //
+                    inscriptionForm.reset(); //
+                    // Réinitialiser les champs de sélection dynamiques
+                    niveauSelect.innerHTML = '<option value="">Sélectionner un niveau</option>'; //
+                    niveauSelect.disabled = true; //
+                    filiereSelect.value = ''; // Efface la filière sélectionnée
+                    // anneeAcademiqueSelect.value = ''; // Plus nécessaire car le champ est disabled/auto-rempli
                 } else {
-                    showAlert(result.message, 'error');
+                    showAlert(result.message, 'error'); //
                 }
-            } catch (error) {
-                showAlert('Une erreur est survenue lors de l\'envoi des données au serveur.', 'error');
-            } finally {
-                submitBtn.classList.remove('loading');
-                submitBtn.disabled = false;
+            } catch (error) { //
+                showAlert('Une erreur est survenue lors de l\'envoi des données au serveur.', 'error'); //
+            } finally { //
+                submitBtn.classList.remove('loading'); //
+                submitBtn.disabled = false; //
                 submitBtn.innerHTML = '<i class="fas fa-save"></i> Enregistrer'; // Restaurer le texte du bouton
             }
         });
 
         // Gestionnaire du bouton Annuler/Reset
-        const cancelBtn = document.getElementById('cancelBtn');
-        cancelBtn.addEventListener('click', () => {
-            inscriptionForm.reset();
-            // Réinitialiser les champs pré-remplis
-            const m2Option = Array.from(niveauSelect.options).find(option => option.textContent === 'M2');
-            if (m2Option) {
-                niveauSelect.value = m2Option.value;
-            } else {
-                niveauSelect.value = '';
-            }
-            const miageOption = Array.from(filiereSelect.options).find(option => option.textContent === 'MIAGE');
-            if (miageOption) {
-                filiereSelect.value = miageOption.value;
-            } else {
-                filiereSelect.value = '';
-            }
-            anneeAcademiqueSelect.value = '';
+        const cancelBtn = document.getElementById('cancelBtn'); //
+        cancelBtn.addEventListener('click', () => { //
+            inscriptionForm.reset(); //
+            // Réinitialiser les champs de sélection dynamiques
+            niveauSelect.innerHTML = '<option value="">Sélectionner un niveau</option>'; //
+            niveauSelect.disabled = true; //
+            filiereSelect.value = ''; // Efface la filière sélectionnée
+            // anneeAcademiqueSelect.value = ''; // Plus nécessaire car le champ est disabled/auto-rempli
             showAlert('', 'info'); // Efface tout message d'alerte
         });
 
 
         // Responsive: Gestion mobile de la sidebar
-        function handleResize() {
-            if (window.innerWidth <= 768) {
-                if (sidebar) sidebar.classList.add('mobile');
+        function handleResize() { //
+            if (window.innerWidth <= 768) { //
+                if (sidebar) sidebar.classList.add('mobile'); //
             } else {
-                if (sidebar) {
-                    sidebar.classList.remove('mobile');
-                    sidebar.classList.remove('collapsed');
+                if (sidebar) { //
+                    sidebar.classList.remove('mobile'); //
+                    sidebar.classList.remove('collapsed'); //
                 }
-                if (mainContent) mainContent.classList.remove('sidebar-collapsed');
+                if (mainContent) mainContent.classList.remove('sidebar-collapsed'); //
             }
         }
 
-        window.addEventListener('resize', handleResize);
+        window.addEventListener('resize', handleResize); //
         handleResize(); // Appel au chargement pour l'état initial
+
+        // Initialiser les niveaux si une filière est déjà sélectionnée (ex: si l'utilisateur revient sur la page avec un cache)
+        document.addEventListener('DOMContentLoaded', () => {
+            if (filiereSelect.value) {
+                loadNiveauxByFiliere(filiereSelect.value);
+            }
+        });
     </script>
 </body>
 </html>

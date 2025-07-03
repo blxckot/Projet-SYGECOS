@@ -9,16 +9,16 @@ if (!isLoggedIn()) {
 // Traitement des actions AJAX
 if (isset($_POST['action']) || isset($_GET['action'])) {
     header('Content-Type: application/json; charset=utf-8');
-    
+
     try {
         global $pdo;
         if (!isset($pdo)) {
             $pdo = new PDO("mysql:host=127.0.0.1;port=3306;dbname=sygecos;charset=utf8mb4", "root", "");
             $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
         }
-        
+
         $action = $_POST['action'] ?? $_GET['action'];
-        
+
         switch ($action) {
             case 'create':
                 handleCreateAjax($pdo);
@@ -48,12 +48,12 @@ try {
         $pdo = new PDO("mysql:host=127.0.0.1;port=3306;dbname=sygecos;charset=utf8mb4", "root", "");
         $pdo->setAttribute(PDO_ATTR_ERRMODE, PDO_ERRMODE_EXCEPTION);
     }
-    
+
     // Vérifier si la colonne statut existe
     $stmt = $pdo->query("DESCRIBE année_academique");
     $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
     $hasStatut = in_array('statut', $columns);
-    
+
     if ($hasStatut) {
         $stmt = $pdo->query("SELECT id_Ac as id_annee, YEAR(date_deb) as annee_debut, YEAR(date_fin) as annee_fin, statut FROM année_academique ORDER BY date_deb DESC");
     } else {
@@ -71,50 +71,59 @@ function handleCreateAjax($pdo) {
     try {
         $anneeDebut = intval($_POST['anneeDebut'] ?? 0);
         $anneeFin = intval($_POST['anneeFin'] ?? 0);
-        
+
         if (empty($anneeDebut) || empty($anneeFin)) {
             echo json_encode(['success' => false, 'message' => 'Veuillez remplir tous les champs']);
             return;
         }
-        
+
         if ($anneeDebut < 2025 || $anneeFin != ($anneeDebut + 1)) {
             echo json_encode(['success' => false, 'message' => 'Années invalides']);
             return;
         }
-        
+
         $finShort = substr($anneeFin, -2);
         $debutShort = substr($anneeDebut, -2);
         $idAnnee = "2{$finShort}{$debutShort}";
-        
+
         $stmt = $pdo->prepare("SELECT id_Ac FROM année_academique WHERE id_Ac = ? OR (YEAR(date_deb) = ? AND YEAR(date_fin) = ?)");
         $stmt->execute([$idAnnee, $anneeDebut, $anneeFin]);
-        
+
         if ($stmt->fetch()) {
             echo json_encode(['success' => false, 'message' => 'Cette année académique existe déjà']);
             return;
         }
-        
+
         $dateDebut = $anneeDebut . '-09-01';
         $dateFin = $anneeFin . '-08-31';
-        
+
         // Vérifier si la colonne statut existe
         $stmt = $pdo->query("DESCRIBE année_academique");
         $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
         $hasStatut = in_array('statut', $columns);
-        
-        if ($hasStatut) {
-            $stmt = $pdo->prepare("INSERT INTO année_academique (id_Ac, date_deb, date_fin, statut) VALUES (?, ?, ?, 'preparation')");
-        } else {
-            $stmt = $pdo->prepare("INSERT INTO année_academique (id_Ac, date_deb, date_fin) VALUES (?, ?, ?)");
+
+        // Assurez-vous que est_courante est aussi présente si statut l'est.
+        $hasEstCourante = in_array('est_courante', $columns);
+        if (!$hasEstCourante) {
+            // Ajouter est_courante si elle n'existe pas, avec une valeur par défaut de 0
+            $pdo->exec("ALTER TABLE année_academique ADD COLUMN est_courante TINYINT(1) DEFAULT '0'");
         }
-        
+
+
+        if ($hasStatut) {
+            $stmt = $pdo->prepare("INSERT INTO année_academique (id_Ac, date_deb, date_fin, statut, est_courante) VALUES (?, ?, ?, 'preparation', 0)");
+        } else {
+            // Si statut n'existait pas, on ajoute juste date_deb, date_fin, et est_courante
+            $stmt = $pdo->prepare("INSERT INTO année_academique (id_Ac, date_deb, date_fin, est_courante) VALUES (?, ?, ?, 0)");
+        }
+
         $result = $stmt->execute([$idAnnee, $dateDebut, $dateFin]);
-        
+
         if (!$result) {
             echo json_encode(['success' => false, 'message' => 'Erreur lors de l\'enregistrement']);
             return;
         }
-        
+
         echo json_encode([
             'success' => true,
             'message' => "Année académique {$anneeDebut}-{$anneeFin} créée avec succès (ID: {$idAnnee})",
@@ -125,7 +134,7 @@ function handleCreateAjax($pdo) {
                 'statut' => 'preparation'
             ]
         ]);
-        
+
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => 'Erreur: ' . $e->getMessage()]);
     }
@@ -134,53 +143,57 @@ function handleCreateAjax($pdo) {
 function handleActivateAjax($pdo) {
     try {
         $idAnnee = $_POST['id_annee'] ?? '';
-        
+
         if (empty($idAnnee)) {
             echo json_encode(['success' => false, 'message' => 'ID année manquant']);
             return;
         }
-        
-        // Vérifier si la colonne statut existe, sinon l'ajouter
+
+        // Vérifier si la colonne statut et est_courante existent, sinon les ajouter
         $stmt = $pdo->query("DESCRIBE année_academique");
         $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
         $hasStatut = in_array('statut', $columns);
-        
+        $hasEstCourante = in_array('est_courante', $columns);
+
         if (!$hasStatut) {
             $pdo->exec("ALTER TABLE année_academique ADD COLUMN statut ENUM('active', 'preparation', 'archivee') DEFAULT 'preparation'");
         }
-        
+        if (!$hasEstCourante) {
+            $pdo->exec("ALTER TABLE année_academique ADD COLUMN est_courante TINYINT(1) DEFAULT '0'");
+        }
+
         // Vérifier que l'année existe
         $stmt = $pdo->prepare("SELECT id_Ac FROM année_academique WHERE id_Ac = ?");
         $stmt->execute([$idAnnee]);
-        
+
         if (!$stmt->fetch()) {
             echo json_encode(['success' => false, 'message' => 'Année académique introuvable']);
             return;
         }
-        
+
         // Transaction pour activer
         $pdo->beginTransaction();
-        
+
         try {
-            // Désactiver toutes les autres années (les mettre en "archivee")
-            $pdo->exec("UPDATE année_academique SET statut = 'archivee' WHERE statut = 'active'");
-            
-            // Activer la nouvelle année
-            $stmt = $pdo->prepare("UPDATE année_academique SET statut = 'active' WHERE id_Ac = ?");
+            // Désactiver toutes les autres années : statut à 'archivee' ET est_courante à 0
+            $pdo->exec("UPDATE année_academique SET statut = 'archivee', est_courante = 0 WHERE est_courante = 1");
+
+            // Activer la nouvelle année : statut à 'active' ET est_courante à 1
+            $stmt = $pdo->prepare("UPDATE année_academique SET statut = 'active', est_courante = 1 WHERE id_Ac = ?");
             $stmt->execute([$idAnnee]);
-            
+
             $pdo->commit();
-            
+
             echo json_encode([
                 'success' => true,
                 'message' => "Année {$idAnnee} activée avec succès"
             ]);
-            
+
         } catch (Exception $e) {
             $pdo->rollback();
             throw $e;
         }
-        
+
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => 'Erreur lors de l\'activation: ' . $e->getMessage()]);
     }
@@ -190,31 +203,31 @@ function handleDeleteAjax($pdo) {
     try {
         $idsJson = $_POST['ids_annee'] ?? '';
         $ids = json_decode($idsJson, true);
-        
+
         if (!is_array($ids) || empty($ids)) {
             echo json_encode(['success' => false, 'message' => 'Aucune année sélectionnée']);
             return;
         }
-        
+
         // Vérifier qu'aucune année active n'est sélectionnée pour la suppression
         $placeholders = str_repeat('?,', count($ids) - 1) . '?';
-        $stmt = $pdo->prepare("SELECT id_Ac FROM année_academique WHERE id_Ac IN ($placeholders) AND statut = 'active'");
+        $stmt = $pdo->prepare("SELECT id_Ac FROM année_academique WHERE id_Ac IN ($placeholders) AND est_courante = 1"); // Utilisation de est_courante
         $stmt->execute($ids);
-        
+
         if ($stmt->fetch()) {
-            echo json_encode(['success' => false, 'message' => 'Impossible de supprimer une année active']);
+            echo json_encode(['success' => false, 'message' => 'Impossible de supprimer une année active. Veuillez la désactiver d\'abord.']);
             return;
         }
-        
+
         $stmt = $pdo->prepare("DELETE FROM année_academique WHERE id_Ac IN ($placeholders)");
         $result = $stmt->execute($ids);
         $deletedCount = $stmt->rowCount();
-        
+
         echo json_encode([
             'success' => true,
             'message' => "{$deletedCount} année(s) supprimée(s) avec succès"
         ]);
-        
+
     } catch (Exception $e) {
         echo json_encode(['success' => false, 'message' => 'Erreur: ' . $e->getMessage()]);
     }
@@ -226,12 +239,12 @@ function handleFetchAllAjax($pdo) {
         $stmt = $pdo->query("DESCRIBE année_academique");
         $columns = $stmt->fetchAll(PDO::FETCH_COLUMN);
         $hasStatut = in_array('statut', $columns);
-        
-        if ($hasStatut) {
-            $stmt = $pdo->query("SELECT id_Ac as id_annee, YEAR(date_deb) as annee_debut, YEAR(date_fin) as annee_fin, statut FROM année_academique ORDER BY date_deb DESC");
-        } else {
-            $stmt = $pdo->query("SELECT id_Ac as id_annee, YEAR(date_deb) as annee_debut, YEAR(date_fin) as annee_fin, 'preparation' as statut FROM année_academique ORDER BY date_deb DESC");
-        }
+        $hasEstCourante = in_array('est_courante', $columns); // Check for est_courante
+
+        $selectStatut = $hasStatut ? 'statut' : "'preparation' as statut";
+        $selectEstCourante = $hasEstCourante ? 'est_courante' : "0 as est_courante"; // Add est_courante to select
+
+        $stmt = $pdo->query("SELECT id_Ac as id_annee, YEAR(date_deb) as annee_debut, YEAR(date_fin) as annee_fin, {$selectStatut}, {$selectEstCourante} FROM année_academique ORDER BY date_deb DESC");
         $years = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
         echo json_encode([
@@ -344,7 +357,7 @@ function handleFetchAllAjax($pdo) {
             /* Ombres */
             --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
             --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
-            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+            --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.05);
             --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
 
             /* Transitions */
@@ -792,36 +805,36 @@ function handleFetchAllAjax($pdo) {
         .badge.bg-warning { background-color: #ffc107; color: #212529; } /* Could be for error or other state */
 
         /* Toast messages */
-        .toast { 
-            position: fixed; top: 20px; right: 20px; padding: 1rem; border-radius: 0.25rem; 
-            color: white; z-index: 1000; animation: fadeIn 0.3s forwards; 
+        .toast {
+            position: fixed; top: 20px; right: 20px; padding: 1rem; border-radius: 0.25rem;
+            color: white; z-index: 1000; animation: fadeIn 0.3s forwards;
             box-shadow: var(--shadow-md); display: flex; align-items: center;
         }
         .toast-success { background-color: var(--success-500); }
         .toast-error { background-color: var(--error-500); }
         .toast-warning { background-color: var(--warning-500); color: #212529; }
         .toast-info { background-color: var(--info-500); }
-        .toast-close-btn { 
-            background: none; border: none; color: inherit; margin-left: 10px; cursor: pointer; 
+        .toast-close-btn {
+            background: none; border: none; color: inherit; margin-left: 10px; cursor: pointer;
             font-size: 1.2em;
         }
-        @keyframes fadeIn { 
-            from { opacity: 0; transform: translateX(100%); } 
-            to { opacity: 1; transform: translateX(0); } 
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateX(100%); }
+            to { opacity: 1; transform: translateX(0); }
         }
 
         /* Modals */
-        .modal { 
+        .modal {
             display: none; /* Hidden by default */
-            position: fixed; top: 0; left: 0; width: 100%; height: 100%; 
-            background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; 
+            position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000;
         }
-        .modal-content { 
-            background: white; padding: 1.5rem; border-radius: 0.5rem; width: 90%; max-width: 500px; 
+        .modal-content {
+            background: white; padding: 1.5rem; border-radius: 0.5rem; width: 90%; max-width: 500px;
             box-shadow: var(--shadow-lg); position: relative;
         }
-        .close-button { 
-            position: absolute; top: 10px; right: 15px; cursor: pointer; font-size: 1.5rem; 
+        .close-button {
+            position: absolute; top: 10px; right: 15px; cursor: pointer; font-size: 1.5rem;
             color: var(--gray-500);
         }
         .close-button:hover {
@@ -844,16 +857,16 @@ function handleFetchAllAjax($pdo) {
 
 
         /* Activation button */
-        .btn-activate { 
-            background: var(--accent-500); 
-            color: white; border: none; padding: 0.25rem 0.5rem; border-radius: 0.25rem; 
-            cursor: pointer; margin-right: 0.25rem; 
+        .btn-activate {
+            background: var(--accent-500);
+            color: white; border: none; padding: 0.25rem 0.5rem; border-radius: 0.25rem;
+            cursor: pointer; margin-right: 0.25rem;
             display: inline-flex; align-items: center; gap: 5px;
             font-size: 0.85em; font-weight: 500;
         }
         .btn-activate:hover { background: var(--accent-600); }
         .btn-activate:disabled { background: var(--gray-400); cursor: not-allowed; }
-        
+
         /* Checkbox styling from gestion_type_util.php */
         .checkbox-container {
             display: block;
@@ -919,26 +932,26 @@ function handleFetchAllAjax($pdo) {
             .main-content {
                 margin-left: var(--sidebar-collapsed-width);
             }
-            
+
             .sidebar {
                 width: var(--sidebar-collapsed-width);
             }
-            
+
             .sidebar-title,
             .nav-text,
             .nav-section-title {
                 opacity: 0;
                 pointer-events: none;
             }
-            
+
             .nav-link {
                 justify-content: center;
             }
-            
+
             .sidebar-toggle .fa-bars {
                 display: none;
             }
-            
+
             .sidebar-toggle .fa-times {
                 display: inline-block;
             }
@@ -948,11 +961,11 @@ function handleFetchAllAjax($pdo) {
             .admin-layout {
                 position: relative;
             }
-            
+
             .main-content {
                 margin-left: 0;
             }
-            
+
             .sidebar {
                 position: fixed;
                 left: -100%;
@@ -961,49 +974,49 @@ function handleFetchAllAjax($pdo) {
                 height: 100vh;
                 overflow-y: auto;
             }
-            
+
             .sidebar.mobile-open {
                 left: 0;
             }
-            
+
             .mobile-menu-overlay.active {
                 display: block;
             }
-            
+
             .sidebar-toggle .fa-bars {
                 display: inline-block;
             }
-            
+
             .sidebar-toggle .fa-times {
                 display: none;
             }
-            
+
             .form-grid {
                 grid-template-columns: 1fr;
             }
-            
+
             .table-header {
                 flex-direction: column;
                 align-items: flex-start;
                 gap: var(--space-4);
             }
-            
+
             .table-actions {
                 width: 100%;
                 justify-content: flex-end;
                 margin-top: var(--space-4);
             }
-            
+
             .search-bar {
                 flex-direction: column;
                 align-items: stretch;
             }
-            
+
             .download-buttons {
                 width: 100%;
                 justify-content: flex-end;
             }
-            
+
             .btn {
                 padding: var(--space-2) var(--space-3);
                 font-size: var(--text-sm);
@@ -1014,40 +1027,40 @@ function handleFetchAllAjax($pdo) {
             .page-content {
                 padding: var(--space-4);
             }
-            
+
             .form-card,
             .table-card,
             .search-bar {
                 padding: var(--space-4);
             }
-            
+
             .page-title-main {
                 font-size: var(--text-2xl);
             }
-            
+
             .page-subtitle {
                 font-size: var(--text-base);
             }
-            
+
             .form-actions {
                 flex-direction: column;
                 gap: var(--space-2);
             }
-            
+
             .btn {
                 width: 100%;
                 justify-content: center;
             }
-            
+
             .table-actions {
                 flex-wrap: wrap;
                 gap: var(--space-2);
             }
-            
+
             .action-buttons {
                 flex-wrap: wrap;
             }
-            
+
             .search-button {
                 width: 100%;
                 justify-content: center;
@@ -1145,24 +1158,44 @@ function handleFetchAllAjax($pdo) {
                                 <tr data-id="<?= htmlspecialchars($year['id_annee']) ?>">
                                     <td>
                                         <label class="checkbox-container">
-                                            <input type="checkbox" value="<?= htmlspecialchars($year['id_annee']) ?>" 
-                                                <?= $year['statut'] === 'active' ? 'disabled' : '' ?>>
+                                            <input type="checkbox" value="<?= htmlspecialchars($year['id_annee']) ?>"
+                                                <?= (isset($year['est_courante']) && $year['est_courante'] == 1) ? 'disabled' : '' ?>>
                                             <span class="checkmark"></span>
                                         </label>
                                     </td>
                                     <td class="year-id"><?= htmlspecialchars($year['id_annee']) ?></td>
                                     <td><?= htmlspecialchars($year['annee_debut']) ?>-<?= htmlspecialchars($year['annee_fin']) ?></td>
                                     <td>
-                                        <?php if ($year['statut'] === 'active'): ?>
-                                            <span class="badge bg-success">Active</span>
-                                        <?php elseif ($year['statut'] === 'preparation'): ?>
-                                            <span class="badge bg-info">Préparation</span>
-                                        <?php else: /* archivee */ ?>
-                                            <span class="badge bg-secondary">Archivée</span>
-                                        <?php endif; ?>
+                                        <?php
+                                        // Déterminer le statut affiché
+                                        $displayStatut = 'Préparation'; // Default if no 'statut' column
+                                        $badgeClass = 'bg-info'; // Default class
+
+                                        // Si la colonne 'statut' existe et est définie
+                                        if (isset($year['statut'])) {
+                                            if ($year['statut'] === 'active') {
+                                                $displayStatut = 'Active';
+                                                $badgeClass = 'bg-success';
+                                            } elseif ($year['statut'] === 'archivee') {
+                                                $displayStatut = 'Archivée';
+                                                $badgeClass = 'bg-secondary';
+                                            } else { // 'preparation'
+                                                $displayStatut = 'Préparation';
+                                                $badgeClass = 'bg-info';
+                                            }
+                                        }
+
+                                        // S'il y a une colonne est_courante et qu'elle est à 1, override le statut pour afficher 'Active'
+                                        // C'est le cas le plus important pour la cohérence
+                                        if (isset($year['est_courante']) && $year['est_courante'] == 1) {
+                                            $displayStatut = 'Active (Courante)';
+                                            $badgeClass = 'bg-success';
+                                        }
+                                        ?>
+                                        <span class="badge <?= $badgeClass ?>"><?= $displayStatut ?></span>
                                     </td>
                                     <td>
-                                        <?php if ($year['statut'] !== 'active'): ?>
+                                        <?php if (!isset($year['est_courante']) || $year['est_courante'] != 1): ?>
                                         <button class="btn-activate" data-id="<?= htmlspecialchars($year['id_annee']) ?>" title="Activer cette année académique">
                                             <i class="fas fa-power-off"></i> Activer
                                         </button>
@@ -1219,7 +1252,9 @@ function handleFetchAllAjax($pdo) {
                 this.exportExcelBtn = document.getElementById('exportExcelBtn');
                 this.exportCsvBtn = document.getElementById('exportCsvBtn');
                 this.modal = document.getElementById('confirmationModal');
-                this.noDataRow = document.getElementById('no-data-row'); // The row that displays "no data" message
+                // Remarque : noDataRow n'est pas utilisé tel quel dans le constructeur,
+                // car le DOM pourrait ne pas encore avoir la ligne si la table est vide.
+                // Il est mieux de la chercher au moment de l'utilisation.
             }
 
             initEventListeners() {
@@ -1231,7 +1266,6 @@ function handleFetchAllAjax($pdo) {
                     const value = e.target.value;
                     if (value && value.length === 4) {
                         this.anneeFinInput.value = parseInt(value) + 1;
-                        // this.showToast('Année de fin complétée automatiquement', 'info'); // Commenté comme demandé
                     }
                 });
 
@@ -1256,9 +1290,7 @@ function handleFetchAllAjax($pdo) {
 
                 // Checkboxes et boutons d'activation (délégation d'événements)
                 this.tableBody.addEventListener('change', (e) => {
-                    console.log('Change event on table body, target:', e.target); // Log pour le débogage
                     if (e.target.type === 'checkbox') {
-                        console.log('Checkbox state:', e.target.value, e.target.checked, 'is disabled:', e.target.disabled); // Log pour le débogage
                         this.updateSelections();
                     }
                 });
@@ -1349,30 +1381,48 @@ function handleFetchAllAjax($pdo) {
                     years.forEach(year => {
                         const newRow = this.tableBody.insertRow();
                         newRow.setAttribute('data-id', year.id_annee);
+
+                        // Déterminer le statut affiché et la classe du badge
+                        let displayStatut = 'Préparation';
+                        let badgeClass = 'bg-info';
+                        let isDisabled = ''; // Pour la checkbox
+
+                        // Si la colonne 'statut' existe et est définie
+                        if (year.statut) {
+                            if (year.statut === 'active') {
+                                displayStatut = 'Active';
+                                badgeClass = 'bg-success';
+                            } elseif (year.statut === 'archivee') {
+                                displayStatut = 'Archivée';
+                                badgeClass = 'bg-secondary';
+                            }
+                        }
+
+                        // S'il y a une colonne est_courante et qu'elle est à 1, cela prend le pas
+                        if (year.est_courante == 1) {
+                            displayStatut = 'Active (Courante)';
+                            badgeClass = 'bg-success';
+                            isDisabled = 'disabled'; // Désactiver la checkbox si c'est l'année courante
+                        }
+
                         newRow.innerHTML = `
                             <td>
                                 <label class="checkbox-container">
-                                    <input type="checkbox" value="${year.id_annee}" 
-                                        ${year.statut === 'active' ? 'disabled' : ''}>
+                                    <input type="checkbox" value="${year.id_annee}"
+                                        ${isDisabled}>
                                     <span class="checkmark"></span>
                                 </label>
                             </td>
                             <td class="year-id">${year.id_annee}</td>
                             <td>${year.annee_debut}-${year.annee_fin}</td>
                             <td>
-                                ${year.statut === 'active' ? 
-                                    '<span class="badge bg-success">Active</span>' : 
-                                    (year.statut === 'preparation' ? 
-                                        '<span class="badge bg-info">Préparation</span>' : 
-                                        '<span class="badge bg-secondary">Archivée</span>'
-                                    )
-                                }
+                                <span class="badge ${badgeClass}">${displayStatut}</span>
                             </td>
                             <td>
-                                ${year.statut !== 'active' ? 
+                                ${year.est_courante != 1 ?
                                     `<button class="btn-activate" data-id="${year.id_annee}" title="Activer cette année académique">
                                         <i class="fas fa-power-off"></i> Activer
-                                    </button>` : 
+                                    </button>` :
                                     `<span style="color: var(--success-500); font-weight: bold;">
                                         <i class="fas fa-check-circle"></i> Année Active
                                     </span>`
@@ -1386,7 +1436,7 @@ function handleFetchAllAjax($pdo) {
 
             async handleFormSubmit(e) {
                 e.preventDefault();
-                
+
                 const anneeDebut = parseInt(this.anneeDebutInput.value);
                 const anneeFin = parseInt(this.anneeFinInput.value);
 
@@ -1420,15 +1470,15 @@ function handleFetchAllAjax($pdo) {
 
             async activateYear(id) {
                 const confirmed = await this.showConfirmationModal(
-                    `Voulez-vous vraiment activer l'année ${id} ?\nCela désactivera l'année actuellement active.`
+                    `Voulez-vous vraiment activer l'année ${id} ?\nCela désactivera l'année actuellement active et la mettra à jour dans tout le système.`
                 );
-                
+
                 if (!confirmed) return;
 
                 try {
                     const result = await this.makeAjaxRequest({ action: 'activate', id_annee: id });
                     this.showToast(result.message, result.success ? 'success' : 'error');
-                    
+
                     if (result.success) {
                         await this.loadAcademicYears(); // Reload table data via AJAX
                     }
@@ -1447,13 +1497,13 @@ function handleFetchAllAjax($pdo) {
                 const confirmed = await this.showConfirmationModal(
                     `Voulez-vous vraiment supprimer ${ids.length} année(s) sélectionnée(s) ?`
                 );
-                
+
                 if (!confirmed) return;
 
                 try {
                     const result = await this.makeAjaxRequest({ action: 'delete', ids_annee: JSON.stringify(ids) });
                     this.showToast(result.message, result.success ? 'success' : 'error');
-                    
+
                     if (result.success) {
                         await this.loadAcademicYears(); // Reload table data via AJAX
                         this.selectedRows.clear(); // Clear selections after successful deletion
@@ -1468,12 +1518,13 @@ function handleFetchAllAjax($pdo) {
                 const searchTerm = this.searchInput.value.toLowerCase();
                 const rows = this.tableBody.querySelectorAll('tr[data-id]');
                 let foundResults = false;
+                let noSearchResultsRow = document.getElementById('no-search-results-row');
 
                 rows.forEach(row => {
                     const id = row.getAttribute('data-id').toLowerCase();
                     const periode = row.querySelector('td:nth-child(3)').textContent.toLowerCase();
-                    const statut = row.querySelector('td:nth-child(4)').textContent.toLowerCase();
-                    
+                    const statut = row.querySelector('td:nth-child(4)').textContent.toLowerCase(); // Check actual display statut
+
                     if (id.includes(searchTerm) || periode.includes(searchTerm) || statut.includes(searchTerm)) {
                         row.style.display = '';
                         foundResults = true;
@@ -1482,41 +1533,45 @@ function handleFetchAllAjax($pdo) {
                     }
                 });
 
-                // Show/hide "No data" message based on search results
-                if (this.noDataRow) {
-                    this.noDataRow.style.display = foundResults || rows.length === 0 ? 'none' : 'table-row';
+                // Gérer le message "Aucun résultat"
+                if (!foundResults && rows.length > 0) {
+                    if (!noSearchResultsRow) {
+                        noSearchResultsRow = this.tableBody.insertRow();
+                        noSearchResultsRow.id = 'no-search-results-row';
+                        noSearchResultsRow.innerHTML = `<td colspan="5" style="text-align: center; padding: 2rem; color: var(--gray-500);">
+                            <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: var(--space-2);"></i><br>
+                            Aucun résultat ne correspond à votre recherche.
+                        </td>`;
+                    }
+                    noSearchResultsRow.style.display = 'table-row';
+                } else if (foundResults && noSearchResultsRow) {
+                    noSearchResultsRow.remove();
+                } else if (!foundResults && rows.length === 0) {
+                    // Si la table était déjà vide et aucune recherche ne correspond, on ne fait rien car le message initial "Aucune donnée" est déjà là.
+                    // S'assurer que le message initial "no-data-row" est affiché si la table est vide et qu'il n'y a pas de recherche.
+                    const initialNoDataRow = document.getElementById('no-data-row');
+                    if (initialNoDataRow) {
+                        initialNoDataRow.style.display = 'table-row';
+                    }
                 }
-                // If there were rows but none matched the search, and no initial "no data" row,
-                // we might need to display a temporary message.
-                if (!foundResults && rows.length > 0 && !document.getElementById('no-search-results-row')) {
-                    const tempNoResultsRow = this.tableBody.insertRow();
-                    tempNoResultsRow.id = 'no-search-results-row';
-                    tempNoResultsRow.innerHTML = `<td colspan="5" style="text-align: center; padding: 2rem; color: var(--gray-500);">
-                        <i class="fas fa-exclamation-triangle" style="font-size: 2rem; margin-bottom: var(--space-2);"></i><br>
-                        Aucun résultat ne correspond à votre recherche.
-                    </td>`;
-                } else if (foundResults && document.getElementById('no-search-results-row')) {
-                    document.getElementById('no-search-results-row').remove();
-                } else if (!foundResults && rows.length === 0 && !this.noDataRow) {
-                     // If table was initially empty and no search results, ensure original empty message is shown.
-                     // This case is handled by renderTable already.
-                }
+                this.updateSelections(); // Update selection state after filter
             }
+
 
             exportToPdf() {
                 const doc = new jsPDF();
                 const title = "Liste des Années Académiques";
                 const date = new Date().toLocaleDateString('fr-FR');
-                
+
                 doc.setFontSize(18);
                 doc.text(title, 14, 20);
-                
+
                 doc.setFontSize(10);
                 doc.text(`Exporté le: ${date}`, 14, 30);
-                
+
                 const headers = [['ID', 'Année Académique', 'Statut']];
                 const data = [];
-                
+
                 document.querySelectorAll('#academicYearsTable tbody tr[data-id]').forEach(row => {
                     // Only export visible rows (after search)
                     if (row.style.display !== 'none') {
@@ -1531,7 +1586,7 @@ function handleFetchAllAjax($pdo) {
                     this.showToast('Aucune donnée visible à exporter en PDF.', 'warning');
                     return;
                 }
-                
+
                 doc.autoTable({
                     head: headers,
                     body: data,
@@ -1550,14 +1605,14 @@ function handleFetchAllAjax($pdo) {
                         fillColor: [241, 245, 249] // gray-100
                     }
                 });
-                
+
                 doc.save(`Années_Academiques_${new Date().toISOString().split('T')[0]}.pdf`);
                 this.showToast('Exportation PDF terminée', 'success');
             }
 
             exportToExcel() {
                 const data = [['ID', 'Année Académique', 'Statut']];
-                
+
                 document.querySelectorAll('#academicYearsTable tbody tr[data-id]').forEach(row => {
                     // Only export visible rows (after search)
                     if (row.style.display !== 'none') {
@@ -1576,14 +1631,14 @@ function handleFetchAllAjax($pdo) {
                 const ws = XLSX.utils.aoa_to_sheet(data);
                 const wb = XLSX.utils.book_new();
                 XLSX.utils.book_append_sheet(wb, ws, "Années Académiques");
-                
+
                 XLSX.writeFile(wb, `Années_Academiques_${new Date().toISOString().split('T')[0]}.xlsx`);
                 this.showToast('Exportation Excel terminée', 'success');
             }
 
             exportToCsv() {
                 let csv = "ID,Année Académique,Statut\n";
-                
+
                 let hasDataToExport = false;
                 document.querySelectorAll('#academicYearsTable tbody tr[data-id]').forEach(row => {
                     // Only export visible rows (after search)
@@ -1595,7 +1650,7 @@ function handleFetchAllAjax($pdo) {
                         hasDataToExport = true;
                     }
                 });
-                
+
                 if (!hasDataToExport) {
                     this.showToast('Aucune donnée visible à exporter en CSV.', 'warning');
                     return;
@@ -1604,27 +1659,24 @@ function handleFetchAllAjax($pdo) {
                 const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
                 const link = document.createElement('a');
                 const url = URL.createObjectURL(blob);
-                
+
                 link.setAttribute('href', url);
                 link.setAttribute('download', `Années_Academiques_${new Date().toISOString().split('T')[0]}.csv`);
                 link.style.visibility = 'hidden';
-                
+
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                
+
                 this.showToast('Exportation CSV terminée', 'success');
             }
 
             updateSelections() {
-                console.log('Running updateSelections()...'); // Log pour le débogage
                 this.selectedRows.clear();
                 // Sélectionner uniquement les cases à cocher qui sont cochées ET non désactivées
                 const checkboxes = this.tableBody.querySelectorAll('input[type="checkbox"]:checked:not(:disabled)');
                 checkboxes.forEach(cb => this.selectedRows.add(cb.value));
-                console.log('selectedRows:', Array.from(this.selectedRows)); // Log pour le débogage
                 this.supprimerBtn.disabled = this.selectedRows.size === 0;
-                console.log('supprimerBtn disabled state:', this.supprimerBtn.disabled); // Log pour le débogage
             }
 
             resetForm() {
@@ -1637,8 +1689,8 @@ function handleFetchAllAjax($pdo) {
                 const btn = this.form.querySelector('button[type="submit"]');
                 if (btn) {
                     btn.disabled = show;
-                    btn.innerHTML = show 
-                        ? '<i class="fas fa-spinner fa-spin"></i> Traitement...' 
+                    btn.innerHTML = show
+                        ? '<i class="fas fa-spinner fa-spin"></i> Traitement...'
                         : '<i class="fas fa-save"></i> Enregistrer';
                 }
             }
@@ -1646,14 +1698,14 @@ function handleFetchAllAjax($pdo) {
             showToast(message, type = 'info') {
                 // Remove existing toasts to prevent stacking too many
                 document.querySelectorAll('.toast').forEach(t => t.remove());
-                
+
                 const toast = document.createElement('div');
                 toast.className = `toast toast-${type}`;
                 toast.innerHTML = `
                     <span>${message}</span>
                     <button class="toast-close-btn" onclick="this.parentElement.remove()">×</button>
                 `;
-                
+
                 document.body.appendChild(toast);
                 setTimeout(() => {
                     if (toast.parentElement) { // Check if toast hasn't been manually closed
@@ -1663,13 +1715,11 @@ function handleFetchAllAjax($pdo) {
             }
 
             showConfirmationModal(message, title = 'Confirmation') {
-                console.log('showConfirmationModal called. Modal element:', this.modal); // Log pour le débogage
                 return new Promise(resolve => {
                     const modal = this.modal;
                     modal.querySelector('#modalTitle').textContent = title;
                     modal.querySelector('#modalMessage').textContent = message;
                     modal.style.display = 'flex'; // Show the modal
-                    console.log('Modal display set to flex. Current computed style:', window.getComputedStyle(modal).display); // Log pour le débogage
 
                     const cleanUp = () => {
                         modal.style.display = 'none'; // Hide the modal
@@ -1683,12 +1733,12 @@ function handleFetchAllAjax($pdo) {
                         cleanUp();
                         resolve(true); // Resolve with true if confirmed
                     };
-                    
+
                     modal.querySelector('#modalCancelBtn').onclick = () => {
                         cleanUp();
                         resolve(false); // Resolve with false if cancelled
                     };
-                    
+
                     modal.querySelector('.close-button').onclick = () => {
                         cleanUp();
                         resolve(false); // Resolve with false if closed by X button
@@ -1700,9 +1750,6 @@ function handleFetchAllAjax($pdo) {
         // Initialisation de la gestion des années académiques quand le DOM est chargé
         document.addEventListener('DOMContentLoaded', () => {
             window.gestionAnnee = new GestionAnneeAcademique();
-            // setTimeout(() => { // Commenté comme demandé
-            //     window.gestionAnnee.showToast('Interface de gestion prête', 'success'); // Commenté comme demandé
-            // }, 500); // Commenté comme demandé
 
             // Gestion du redimensionnement de la fenêtre pour la sidebar (copié de gestion_type_util.php)
             function handleResize() {

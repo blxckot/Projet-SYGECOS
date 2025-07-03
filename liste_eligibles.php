@@ -15,10 +15,10 @@ try {
     error_log("Erreur récupération année active: " . $e->getMessage());
 }
 
-// Récupération des niveaux d'étude
+// Récupération des niveaux d'étude (tous, pour initialisation)
 $niveauxEtude = [];
 try {
-    $stmt = $pdo->query("SELECT id_niv_etu, lib_niv_etu FROM niveau_etude ORDER BY lib_niv_etu");
+    $stmt = $pdo->query("SELECT id_niv_etu, lib_niv_etu, fk_id_filiere FROM niveau_etude ORDER BY lib_niv_etu");
     $niveauxEtude = $stmt->fetchAll(PDO::FETCH_ASSOC);
 } catch (PDOException $e) {
     error_log("Erreur récupération niveaux: " . $e->getMessage());
@@ -46,7 +46,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $niveauId = intval($_POST['niveau_id'] ?? 0);
                 $filiereId = intval($_POST['filiere_id'] ?? 0);
                 $statutFiltre = $_POST['statut_filtre'] ?? 'tous';
-                $creditsMin = intval($_POST['credits_min'] ?? 60);
+                $creditsMin = 60; // Hardcoded as per request to remove input field
                 $searchTerm = trim($_POST['search_term'] ?? '');
                 
                 if ($anneeId <= 0) {
@@ -161,7 +161,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 
                 echo json_encode(['success' => true, 'data' => $resultats]);
                 break;
-                
+            
+            case 'charger_niveaux_par_filiere':
+                $filiereId = intval($_POST['filiere_id'] ?? 0);
+                $niveauxFiltres = [];
+                if ($filiereId > 0) {
+                    $stmt = $pdo->prepare("SELECT id_niv_etu, lib_niv_etu FROM niveau_etude WHERE fk_id_filiere = ? ORDER BY lib_niv_etu");
+                    $stmt->execute([$filiereId]);
+                    $niveauxFiltres = $stmt->fetchAll(PDO::FETCH_ASSOC);
+                }
+                echo json_encode(['success' => true, 'niveaux' => $niveauxFiltres]);
+                break;
+
             case 'exporter_liste':
                 $format = $_POST['format'] ?? 'excel';
                 $donnees = json_decode($_POST['donnees'] ?? '[]', true);
@@ -293,8 +304,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         .form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: var(--space-6); margin-bottom: var(--space-6); }
         .form-group { display: flex; flex-direction: column; }
         .form-group label { font-size: var(--text-sm); font-weight: 500; color: var(--gray-700); margin-bottom: var(--space-2); }
-        .form-group input, .form-group select { padding: var(--space-3); border: 1px solid var(--gray-300); border-radius: var(--radius-md); font-size: var(--text-base); color: var(--gray-800); transition: all var(--transition-fast); }
-        .form-group input:disabled { background-color: var(--gray-100); color: var(--gray-500); cursor: not-allowed; }
+        .form-group input, .form-group select, .form-group textarea { padding: var(--space-3); border: 1px solid var(--gray-300); border-radius: var(--radius-md); font-size: var(--text-base); color: var(--gray-800); transition: all var(--transition-fast); }
+        .form-group input:disabled, .form-group select:disabled, .form-group textarea:disabled { background-color: var(--gray-100); color: var(--gray-500); cursor: not-allowed; }
 
         .btn { padding: var(--space-3) var(--space-5); border-radius: var(--radius-md); font-size: var(--text-base); font-weight: 600; cursor: pointer; transition: all var(--transition-fast); border: none; display: inline-flex; align-items: center; gap: var(--space-2); }
         .btn-primary { background-color: var(--accent-600); color: white; } .btn-primary:hover { background-color: var(--accent-700); }
@@ -392,10 +403,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <p class="page-subtitle">Gestion complète des listes d'éligibilité avec filtres avancés et exports</p>
                 </div>
 
-                <!-- Message d'alerte -->
                 <div id="alertMessage" class="alert"></div>
 
-                <!-- Formulaire de filtres -->
                 <div class="form-card">
                     <h3 class="form-card-title">Filtres de recherche</h3>
                     <form id="filterForm">
@@ -404,17 +413,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 <label for="annee_id">Année académique</label>
                                 <input type="text" id="annee_display" value="<?php echo htmlspecialchars($anneeActive['annee_libelle'] ?? 'Non définie'); ?>" disabled>
                                 <input type="hidden" id="annee_id" value="<?php echo $anneeActive['id_Ac'] ?? ''; ?>">
-                            </div>
-                            <div class="form-group">
-                                <label for="niveau_id">Niveau d'étude</label>
-                                <select id="niveau_id" name="niveau_id">
-                                    <option value="">Tous les niveaux</option>
-                                    <?php foreach ($niveauxEtude as $niveau): ?>
-                                        <option value="<?php echo $niveau['id_niv_etu']; ?>">
-                                            <?php echo htmlspecialchars($niveau['lib_niv_etu']); ?>
-                                        </option>
-                                    <?php endforeach; ?>
-                                </select>
                             </div>
                             <div class="form-group">
                                 <label for="filiere_id">Filière</label>
@@ -428,16 +426,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </select>
                             </div>
                             <div class="form-group">
+                                <label for="niveau_id">Niveau d'étude</label>
+                                <select id="niveau_id" name="niveau_id" disabled>
+                                    <option value="">Sélectionnez une filière d'abord</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
                                 <label for="statut_filtre">Statut d'éligibilité</label>
                                 <select id="statut_filtre" name="statut_filtre">
                                     <option value="tous">Tous les statuts</option>
                                     <option value="eligibles">Éligibles seulement</option>
                                     <option value="non_eligibles">Non éligibles seulement</option>
                                 </select>
-                            </div>
-                            <div class="form-group">
-                                <label for="credits_min">Crédits minimum</label>
-                                <input type="number" id="credits_min" name="credits_min" value="60" min="0" max="120" step="1">
                             </div>
                             <div class="form-group">
                                 <label for="search_term">Recherche libre</label>
@@ -455,7 +455,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </form>
                 </div>
 
-                <!-- Barre d'outils -->
                 <div class="toolbar" id="toolbarSection" style="display: none;">
                     <div class="toolbar-section">
                         <div class="toolbar-title">Actions rapides</div>
@@ -476,7 +475,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 </div>
 
-                <!-- Statistiques -->
                 <div class="stats-bar" id="statsSection" style="display: none;">
                     <div class="stat-item">
                         <div class="stat-value" id="totalEtudiants">0</div>
@@ -496,7 +494,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     </div>
                 </div>
 
-                <!-- Tableau des résultats -->
                 <div class="table-container" id="tableSection" style="display: none;">
                     <div class="table-header">
                         <h3 class="table-title">Liste des étudiants (<span id="resultCount">0</span>)</h3>
@@ -532,8 +529,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                                 </tr>
                             </thead>
                             <tbody>
-                                <!-- Contenu généré dynamiquement -->
-                            </tbody>
+                                </tbody>
                         </table>
                     </div>
                 </div>
@@ -541,7 +537,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </main>
     </div>
 
-    <!-- Modal import Excel -->
     <div id="importModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -570,7 +565,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         </div>
     </div>
 
-    <!-- Modal modification statut -->
     <div id="statutModal" class="modal">
         <div class="modal-content">
             <div class="modal-header">
@@ -592,8 +586,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     <textarea id="commentaireStatut" rows="3" placeholder="Raison du changement de statut..."></textarea>
                 </div>
                 <div id="selectionSummary" style="padding: var(--space-3); background: var(--gray-50); border-radius: var(--radius-md); margin-top: var(--space-3);">
-                    <!-- Résumé de la sélection -->
-                </div>
+                    </div>
             </div>
             <div class="modal-footer">
                 <button class="btn btn-secondary" onclick="closeModal('statutModal')">Annuler</button>
@@ -608,6 +601,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // Variables globales
         let currentData = [];
         let selectedMatricules = new Set();
+        const allNiveauxEtude = <?php echo json_encode($niveauxEtude); ?>;
 
         // Fonctions utilitaires
         function showAlert(message, type = 'info') {
@@ -636,6 +630,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 throw error;
             }
         }
+
+        // Handle Filiere change to update Niveau d'étude dropdown
+        document.getElementById('filiere_id').addEventListener('change', function() {
+            const filiereId = this.value;
+            const niveauSelect = document.getElementById('niveau_id');
+            niveauSelect.innerHTML = '<option value="">Sélectionnez un niveau</option>'; // Reset options
+
+            if (filiereId) {
+                // Enable the niveau_id select
+                niveauSelect.disabled = false;
+                // Filter niveaux based on selected filiere
+                const filteredNiveaux = allNiveauxEtude.filter(niveau => niveau.fk_id_filiere == filiereId);
+                
+                filteredNiveaux.forEach(niveau => {
+                    const option = document.createElement('option');
+                    option.value = niveau.id_niv_etu;
+                    option.textContent = niveau.lib_niv_etu;
+                    niveauSelect.appendChild(option);
+                });
+            } else {
+                // If no filiere selected, disable niveau_id
+                niveauSelect.disabled = true;
+                niveauSelect.innerHTML = '<option value="">Sélectionnez une filière d\'abord</option>';
+            }
+        });
+
 
         // Recherche des étudiants
         document.getElementById('filterForm').addEventListener('submit', async function(e) {
@@ -943,8 +963,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         document.getElementById('resetBtn').addEventListener('click', function() {
             document.getElementById('filterForm').reset();
             document.getElementById('annee_display').value = "<?php echo htmlspecialchars($anneeActive['annee_libelle'] ?? 'Non définie'); ?>";
-            document.getElementById('credits_min').value = '60';
             
+            // Reset and disable niveau_id
+            document.getElementById('niveau_id').innerHTML = '<option value="">Sélectionnez une filière d\'abord</option>';
+            document.getElementById('niveau_id').disabled = true;
+
             // Masquer les sections
             document.getElementById('toolbarSection').style.display = 'none';
             document.getElementById('statsSection').style.display = 'none';

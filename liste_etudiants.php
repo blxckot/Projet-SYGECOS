@@ -9,11 +9,11 @@ if (!isLoggedIn()) {
 // Traitement AJAX pour récupérer les étudiants ou un seul étudiant
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
     header('Content-Type: application/json');
-    
+
     try {
         if ($_POST['action'] === 'get_etudiants') {
             $query = "
-                SELECT 
+                SELECT
                     e.num_etu,
                     e.nom_etu,
                     e.prenoms_etu,
@@ -32,7 +32,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     CONCAT(YEAR(aa.date_deb), '-', YEAR(aa.date_fin)) as annee_academique,
                     i.dte_insc,
                     i.montant_insc,
-                    CASE 
+                    CASE
                         WHEN e.fk_id_util IS NOT NULL AND u.login_util IS NOT NULL AND u.login_util != '' THEN 'Oui'
                         ELSE 'Non'
                     END as a_identifiants
@@ -44,16 +44,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                 LEFT JOIN année_academique aa ON i.fk_id_Ac = aa.id_Ac
                 ORDER BY e.num_etu DESC
             ";
-            
+
             $stmt = $pdo->prepare($query);
             $stmt->execute();
             $etudiants = $stmt->fetchAll(PDO::FETCH_ASSOC);
-            
+
             echo json_encode(['success' => true, 'data' => $etudiants]);
         } elseif ($_POST['action'] === 'get_etudiant_details') {
             $numEtu = $_POST['num_etu'];
             $query = "
-                SELECT 
+                SELECT
                     e.num_etu,
                     e.nom_etu,
                     e.prenoms_etu,
@@ -69,7 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
                     CONCAT(YEAR(aa.date_deb), '-', YEAR(aa.date_fin)) as annee_academique,
                     i.dte_insc,
                     i.montant_insc,
-                    CASE 
+                    CASE
                         WHEN e.fk_id_util IS NOT NULL AND u.login_util IS NOT NULL AND u.login_util != '' THEN 'Oui'
                         ELSE 'Non'
                     END as a_identifiants
@@ -100,31 +100,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action'])) {
 // Traitement AJAX pour supprimer un étudiant
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'supprimer_etudiant') {
     header('Content-Type: application/json');
-    
+
     $numEtu = $_POST['num_etu'];
-    
+
     try {
         $pdo->beginTransaction();
-        
+
         // Récupérer l'ID utilisateur associé
         $stmtUser = $pdo->prepare("SELECT fk_id_util FROM etudiant WHERE num_etu = ?");
         $stmtUser->execute([$numEtu]);
         $etudiant = $stmtUser->fetch(PDO::FETCH_ASSOC);
-        
+
         // Supprimer les inscriptions
         $stmtDelInsc = $pdo->prepare("DELETE FROM inscrire WHERE fk_num_etu = ?");
         $stmtDelInsc->execute([$numEtu]);
-        
+
         // Supprimer l'étudiant
         $stmtDelEtu = $pdo->prepare("DELETE FROM etudiant WHERE num_etu = ?");
         $stmtDelEtu->execute([$numEtu]);
-        
+
         // Supprimer l'utilisateur associé si il existe
         if ($etudiant && $etudiant['fk_id_util']) {
             $stmtDelUser = $pdo->prepare("DELETE FROM utilisateur WHERE id_util = ?");
             $stmtDelUser->execute([$etudiant['fk_id_util']]);
         }
-        
+
         $pdo->commit();
         echo json_encode(['success' => true, 'message' => 'Étudiant supprimé avec succès']);
     } catch (Exception $e) {
@@ -137,36 +137,36 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['
 // Traitement AJAX pour supprimer plusieurs étudiants
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['action']) && $_POST['action'] === 'supprimer_multiple') {
     header('Content-Type: application/json');
-    
+
     $numEtudiants = json_decode($_POST['num_etudiants'], true);
-    
+
     try {
         $pdo->beginTransaction();
-        
+
         $supprimerCount = 0;
         foreach ($numEtudiants as $numEtu) {
             // Récupérer l'ID utilisateur associé
             $stmtUser = $pdo->prepare("SELECT fk_id_util FROM etudiant WHERE num_etu = ?");
             $stmtUser->execute([$numEtu]);
             $etudiant = $stmtUser->fetch(PDO::FETCH_ASSOC);
-            
+
             // Supprimer les inscriptions
             $stmtDelInsc = $pdo->prepare("DELETE FROM inscrire WHERE fk_num_etu = ?");
             $stmtDelInsc->execute([$numEtu]);
-            
+
             // Supprimer l'étudiant
             $stmtDelEtu = $pdo->prepare("DELETE FROM etudiant WHERE num_etu = ?");
             $stmtDelEtu->execute([$numEtu]);
-            
+
             // Supprimer l'utilisateur associé si il existe
             if ($etudiant && $etudiant['fk_id_util']) {
                 $stmtDelUser = $pdo->prepare("DELETE FROM utilisateur WHERE id_util = ?");
                 $stmtDelUser->execute([$etudiant['fk_id_util']]);
             }
-            
+
             $supprimerCount++;
         }
-        
+
         $pdo->commit();
         echo json_encode(['success' => true, 'message' => "$supprimerCount étudiant(s) supprimé(s) avec succès"]);
     } catch (Exception $e) {
@@ -185,7 +185,7 @@ $anneesAcademiques = [];
 try {
     // Récupérer tous les étudiants
     $queryEtudiants = "
-        SELECT 
+        SELECT
             e.num_etu,
             e.nom_etu,
             e.prenoms_etu,
@@ -204,7 +204,7 @@ try {
             CONCAT(YEAR(aa.date_deb), '-', YEAR(aa.date_fin)) as annee_academique,
             i.dte_insc,
             i.montant_insc,
-            CASE 
+            CASE
                 WHEN e.fk_id_util IS NOT NULL AND u.login_util IS NOT NULL AND u.login_util != '' THEN 'Oui'
                         ELSE 'Non'
                     END as a_identifiants
@@ -740,7 +740,7 @@ try {
             align-items: center;
             flex-wrap: wrap;
         }
-        
+
         /* Barre de recherche (uniformisée) */
         .search-bar {
             background: var(--white);
@@ -800,7 +800,7 @@ try {
         .search-button:hover {
             background-color: var(--accent-700);
         }
-        
+
         .download-buttons {
             display: flex;
             gap: var(--space-3);
@@ -831,20 +831,20 @@ try {
             font-size: var(--text-base);
         }
 
-        .bulk-actions { 
-            padding: var(--space-4) var(--space-6); 
-            border-bottom: 1px solid var(--gray-200); 
-            background: var(--gray-50); 
-            display: none; 
-            align-items: center; 
-            gap: var(--space-4); 
+        .bulk-actions {
+            padding: var(--space-4) var(--space-6);
+            border-bottom: 1px solid var(--gray-200);
+            background: var(--gray-50);
+            display: none;
+            align-items: center;
+            gap: var(--space-4);
         }
-        .bulk-actions.show { 
-            display: flex; 
+        .bulk-actions.show {
+            display: flex;
         }
-        .selected-count { 
-            font-weight: 600; 
-            color: var(--gray-700); 
+        .selected-count {
+            font-weight: 600;
+            color: var(--gray-700);
         }
 
         .table-wrapper {
@@ -878,7 +878,7 @@ try {
 
         .checkbox-cell { width: 40px; }
         .checkbox-cell input[type="checkbox"] { width: 16px; height: 16px; accent-color: var(--accent-500); }
-        
+
         /* Checkbox styling (from gestion_Ecue.php for consistency) */
         .checkbox-container {
             display: block;
@@ -1164,7 +1164,7 @@ try {
             color: var(--gray-800);
             line-height: 1.5;
         }
-        
+
         @media (max-width: 500px) {
             .detail-item {
                 flex-direction: column;
@@ -1190,7 +1190,7 @@ try {
             /* No direct padding here, handled by .detail-group */
             /* Removed background-color: #fefefe; as it's set on modal-content already */
         }
-        
+
         /* Filter Modal */
         .filter-modal {
             display: none; /* Hidden by default */
@@ -1259,7 +1259,7 @@ try {
             font-weight: 500;
             color: var(--gray-700);
         }
-        
+
         /* Specific styles for radio groups within filter dropdown */
         .filter-option-group {
             padding: var(--space-2) 0;
@@ -1340,7 +1340,7 @@ try {
             .main-content {
                 margin-left: 0;
             }
-            
+
             .sidebar {
                 position: fixed;
                 left: -100%;
@@ -1349,11 +1349,11 @@ try {
                 height: 100vh;
                 overflow-y: auto;
             }
-            
+
             .sidebar.mobile-open {
                 left: 0;
             }
-            
+
             .mobile-menu-overlay.active {
                 display: block;
             }
@@ -1373,13 +1373,13 @@ try {
             }
 
             .stats-grid { grid-template-columns: 1fr; }
-            
+
             .page-header {
                 flex-direction: column;
                 align-items: flex-start;
                 gap: var(--space-4);
             }
-            
+
             .table-actions {
                 width: 100%;
                 justify-content: flex-start; /* Adjust to flex-start for stacking */
@@ -1405,19 +1405,19 @@ try {
             .page-content {
                 padding: var(--space-4);
             }
-            
+
             .table-container {
                 padding: var(--space-4);
             }
-            
+
             .page-title-main {
                 font-size: var(--text-2xl);
             }
-            
+
             .page-subtitle {
                 font-size: var(--text-base);
             }
-            
+
             .table-actions {
                 flex-wrap: wrap;
                 gap: var(--space-2);
@@ -1516,7 +1516,7 @@ try {
                             <i class="fas fa-file-excel"></i> Export sélection
                         </button>
                     </div>
-                    
+
                     <div class="table-wrapper">
                         <table class="data-table">
                             <thead>
@@ -1651,7 +1651,7 @@ try {
                     </div>
                 </div>
             </div>
-            
+
             <div class="filter-group">
                 <label>Filtrer par Filière:</label>
                 <div class="filter-option-group" id="filiereFilterRadioGroup">
@@ -1711,7 +1711,7 @@ try {
                     <?php endforeach; ?>
                 </div>
             </div>
-            
+
             <div class="filter-actions-dropdown">
                 <button class="btn btn-secondary" id="resetFilterModalBtn">Réinitialiser</button>
                 <button class="btn btn-primary" id="applyFilterModalBtn">Appliquer</button>
@@ -1822,10 +1822,10 @@ try {
         function toggleSidebar() {
             sidebar.classList.toggle('mobile-open');
             mobileMenuOverlay.classList.toggle('active');
-            
+
             const barsIcon = sidebarToggle.querySelector('.fa-bars');
             const timesIcon = sidebarToggle.querySelector('.fa-times');
-            
+
             if (sidebar.classList.contains('mobile-open')) {
                 if (barsIcon) barsIcon.style.display = 'none';
                 if (timesIcon) timesIcon.style.display = 'inline-block';
@@ -1872,10 +1872,10 @@ try {
                 if (result.success) {
                     etudiantsData = result.data; // Store the full dataset
                     applyFiltersAndSort(
-                        currentSortType, 
-                        currentFiliereFilter, 
-                        currentNiveauFilter, 
-                        currentAnneeFilter, 
+                        currentSortType,
+                        currentFiliereFilter,
+                        currentNiveauFilter,
+                        currentAnneeFilter,
                         searchInput.value
                     ); // Apply filters and display
                     updateStats(etudiantsData);
@@ -1904,8 +1904,8 @@ try {
             }
 
             studentsToRender.forEach(etudiant => {
-                const identifiantsBadge = etudiant.a_identifiants === 'Oui' 
-                    ? '<span class="badge badge-success">Oui</span>' 
+                const identifiantsBadge = etudiant.a_identifiants === 'Oui'
+                    ? '<span class="badge badge-success">Oui</span>'
                     : '<span class="badge badge-warning">Non</span>';
 
                 const newRow = etudiantsTableBody.insertRow();
@@ -1948,7 +1948,7 @@ try {
         // Attach event listeners to rows (checkboxes)
         function attachEventListenersToRow(row) {
             const checkbox = row.querySelector('input[type="checkbox"]');
-            
+
             checkbox.addEventListener('change', function() {
                 if (this.checked) {
                     selectedEtudiants.add(this.value);
@@ -2002,7 +2002,7 @@ try {
         function updateSelection() {
             const checkedCheckboxes = document.querySelectorAll('.etudiant-checkbox:checked');
             selectedEtudiants = new Set(Array.from(checkedCheckboxes).map(cb => cb.value));
-            
+
             if (selectedEtudiants.size > 0) {
                 bulkActionsDiv.classList.add('show');
                 selectedCountSpan.textContent = `${selectedEtudiants.size} étudiant(s) sélectionné(s)`;
@@ -2013,7 +2013,7 @@ try {
                 supprimerEtudiantBtn.disabled = true;
                 modifierEtudiantBtn.disabled = true;
             }
-            
+
             // Update "Select All" checkbox state
             const totalCheckboxes = document.querySelectorAll('.etudiant-checkbox').length;
             selectAllCheckbox.indeterminate = selectedEtudiants.size > 0 && selectedEtudiants.size < totalCheckboxes;
@@ -2032,9 +2032,11 @@ try {
             }
         });
 
+        // Modified function to redirect to inscription_etudiant.php for modification
         function modifierEtudiant(numEtu) {
-            window.location.href = `modifier_etudiant.php?etudiant=${numEtu}`;
+            window.location.href = `inscription_etudiant.php?etudiant=${numEtu}`; // Redirection vers inscription_etudiant.php
         }
+
 
         // Delete single student
         async function supprimerEtudiant(numEtu, nomComplet) {
@@ -2107,10 +2109,10 @@ try {
                 'N° Étudiant', 'Nom', 'Prénoms', 'Email', 'Date de naissance', 'Lieu de naissance',
                 'Téléphone', 'Niveau', 'Filière', 'Année académique', 'Date inscription', 'Identifiants'
             ];
-            
+
             let dataToExport = [];
             if (onlySelected) {
-                dataToExport = Array.from(selectedEtudiants).map(numEtu => 
+                dataToExport = Array.from(selectedEtudiants).map(numEtu =>
                     etudiantsData.find(e => e.num_etu === numEtu)
                 ).filter(Boolean); // Remove any undefined if not found
             } else {
@@ -2134,7 +2136,7 @@ try {
                 formatDate(etudiant.dte_insc),
                 etudiant.a_identifiants || 'N/A'
             ]);
-            
+
             return { headers, rows };
         }
 
@@ -2146,7 +2148,7 @@ try {
                     showAlert("Aucune donnée visible à exporter.", 'warning');
                     return;
                 }
-                
+
                 const doc = new jsPDF('landscape'); // Use landscape for more columns
                 doc.setFontSize(14);
                 doc.text('Liste des Étudiants', 14, 15);
@@ -2160,7 +2162,7 @@ try {
                     headStyles: { fillColor: [59, 130, 246] },
                     margin: { left: 10, right: 10 }
                 });
-                
+
                 doc.save(`liste_etudiants_${new Date().toISOString().slice(0,10)}.pdf`);
                 showAlert("Export PDF réussi !", 'success');
             } catch (error) {
@@ -2177,7 +2179,7 @@ try {
                     showAlert("Aucune donnée visible à exporter.", 'warning');
                     return;
                 }
-                
+
                 const wb = XLSX.utils.book_new();
                 const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
                 XLSX.utils.book_append_sheet(wb, ws, "Etudiants");
@@ -2197,18 +2199,18 @@ try {
                     showAlert("Aucune donnée visible à exporter.", 'warning');
                     return;
                 }
-                
+
                 let csvContent = headers.map(h => `"${h}"`).join(";") + "\n";
                 rows.forEach(row => csvContent += row.map(cell => `"${cell}"`).join(";") + "\n");
-                
+
                 const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
                 const link = document.createElement("a");
                 const url = URL.createObjectURL(blob);
-                
+
                 link.setAttribute("href", url);
                 link.setAttribute("download", `liste_etudiants_${new Date().toISOString().slice(0,10)}.csv`);
                 link.style.visibility = 'hidden';
-                
+
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
@@ -2228,7 +2230,7 @@ try {
 
             try {
                 const { headers, rows } = getExportData(true); // true to get only selected
-                
+
                 const wb = XLSX.utils.book_new();
                 const ws = XLSX.utils.aoa_to_sheet([headers, ...rows]);
                 XLSX.utils.book_append_sheet(wb, ws, "Etudiants Selection");
@@ -2280,7 +2282,7 @@ try {
             // 5. Apply Sorting
             filteredAndSortedData.sort((a, b) => {
                 switch (sortType) {
-                    case 'name-asc': 
+                    case 'name-asc':
                         return (a.nom_etu + ' ' + a.prenoms_etu).localeCompare(b.nom_etu + ' ' + b.prenoms_etu);
                     case 'name-desc':
                         return (b.nom_etu + ' ' + b.prenoms_etu).localeCompare(a.nom_etu + ' ' + a.prenoms_etu);
@@ -2293,7 +2295,7 @@ try {
                         // No specific sort order, maintain the order from filtering (or initial if no filter)
                         // For stable sort, you might want to sort by a unique ID if available.
                         // Since DB query sorts by num_etu DESC, we can fallback to that if 'default' sort is truly needed.
-                        return 0; 
+                        return 0;
                 }
             });
 
@@ -2315,10 +2317,10 @@ try {
             currentAnneeFilter = 'all_annees';
 
             applyFiltersAndSort(
-                currentSortType, 
-                currentFiliereFilter, 
-                currentNiveauFilter, 
-                currentAnneeFilter, 
+                currentSortType,
+                currentFiliereFilter,
+                currentNiveauFilter,
+                currentAnneeFilter,
                 searchInput.value
             );
         });
@@ -2335,10 +2337,10 @@ try {
             currentAnneeFilter = 'all_annees';
 
             applyFiltersAndSort(
-                currentSortType, 
-                currentFiliereFilter, 
-                currentNiveauFilter, 
-                currentAnneeFilter, 
+                currentSortType,
+                currentFiliereFilter,
+                currentNiveauFilter,
+                currentAnneeFilter,
                 searchInput.value
             );
         });
@@ -2379,15 +2381,15 @@ try {
             if (selectedAnneeFilterRadio) {
                 currentAnneeFilter = selectedAnneeFilterRadio.value;
             }
-            
+
             // Clear search input when applying filters from modal
             searchInput.value = '';
 
             applyFiltersAndSort(
-                currentSortType, 
-                currentFiliereFilter, 
-                currentNiveauFilter, 
-                currentAnneeFilter, 
+                currentSortType,
+                currentFiliereFilter,
+                currentNiveauFilter,
+                currentAnneeFilter,
                 searchInput.value
             );
             filterModal.style.display = 'none';
@@ -2431,7 +2433,7 @@ try {
 
             if (activeFiltersCount > 0) {
                 filterButtonText.textContent = `Filtres (${activeFiltersCount} actifs)`;
-                filterButton.classList.add('btn-active-filter'); 
+                filterButton.classList.add('btn-active-filter');
             } else {
                 filterButtonText.textContent = 'Filtres';
                 filterButton.classList.remove('btn-active-filter');
@@ -2522,7 +2524,7 @@ try {
             doc.line(15, currentY + 1, doc.internal.pageSize.getWidth() - 15, currentY + 1); // Underline
             currentY += 10;
             doc.setTextColor(0, 0, 0); // Reset color
-            
+
             // Personal Information
             doc.setFontSize(14);
             doc.text('Informations Personnelles', 15, currentY);
@@ -2631,7 +2633,7 @@ try {
             if (sidebarToggle && sidebar && mainContent) {
                 // Initial state based on window width
                 handleResponsiveLayout();
-                
+
                 sidebarToggle.addEventListener('click', function() {
                     if (window.innerWidth <= 768) {
                         sidebar.classList.toggle('mobile-open');
@@ -2689,11 +2691,11 @@ try {
                 sidebar.classList.remove('mobile-open'); // Ensure it's closed if was open on mobile and resized to desktop
                 mobileMenuOverlay.classList.remove('active'); // Hide overlay
             }
-            
+
             // Adjust sidebar toggle icon for mobile
             if (sidebarToggle) {
                 const barsIcon = sidebarToggle.querySelector('.fa-bars');
-                const timesIcon = sidebarToggle.CquerySelector('.fa-times');
+                const timesIcon = sidebarToggle.querySelector('.fa-times');
                 if (isMobile) {
                     if (barsIcon) barsIcon.style.display = 'inline-block';
                     if (timesIcon) timesIcon.style.display = 'none';
