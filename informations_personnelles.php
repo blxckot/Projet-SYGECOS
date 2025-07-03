@@ -1,142 +1,181 @@
+<?php
+// Démarre la session pour utiliser les variables de session.
+session_start();
+
+// --- VÉRIFICATION DE LA CONNEXION ---
+// On vérifie si l'utilisateur est bien connecté et si son rôle est 'etudiant'.
+if (!isset($_SESSION['loggedin']) || $_SESSION['loggedin'] !== TRUE || $_SESSION['user_type'] !== 'etudiant' || !isset($_SESSION['id_util'])) {
+    // Si l'une de ces conditions n'est pas remplie, on le redirige vers la page de connexion.
+    header('Location: loginForm.php');
+    exit;
+}
+
+// --- CONNEXION À LA BASE DE DONNÉES ---
+$host = '127.0.0.1';
+$db   = 'sygecos';
+$user = 'root';
+$pass = '';
+$charset = 'utf8mb4';
+
+$dsn = "mysql:host=$host;dbname=$db;charset=$charset";
+$options = [
+    PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+    PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+    PDO::ATTR_EMULATE_PREPARES   => false,
+];
+
+try {
+     $pdo = new PDO($dsn, $user, $pass, $options);
+} catch (\PDOException $e) {
+     throw new \PDOException($e->getMessage(), (int)$e->getCode());
+}
+
+// --- RÉCUPÉRATION DU NUMÉRO D'ÉTUDIANT (num_etu) ---
+try {
+    $stmt_num_etu = $pdo->prepare("SELECT num_etu FROM etudiant WHERE fk_id_util = ?");
+    $stmt_num_etu->execute([$_SESSION['id_util']]);
+    $result = $stmt_num_etu->fetch();
+
+    if (!$result || !isset($result['num_etu'])) {
+        session_destroy();
+        header('Location: loginForm.php?error=datainconsistency');
+        exit;
+    }
+    $num_etu = $result['num_etu'];
+
+} catch (\PDOException $e) {
+    die("Erreur lors de la récupération des informations de l'étudiant: " . $e->getMessage());
+}
+
+// --- TRAITEMENT DU FORMULAIRE DE MODIFICATION (POST) ---
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    // Récupérer et nettoyer les données du formulaire
+    $nom = trim($_POST['nom_etu'] ?? '');
+    $prenoms = trim($_POST['prenoms_etu'] ?? '');
+    $email = trim($_POST['email_etu'] ?? '');
+    $telephone = trim($_POST['telephone'] ?? '');
+    $lieu_naissance = trim($_POST['lieu_naissance'] ?? '');
+    $dte_naiss_etu = trim($_POST['dte_naiss_etu'] ?? '');
+
+    // Validation (simple pour l'exemple, à renforcer si nécessaire)
+    $errors = [];
+    if (empty($nom)) $errors[] = "Le nom est requis.";
+    if (empty($prenoms)) $errors[] = "Le prénom est requis.";
+    if (!filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = "L'adresse email n'est pas valide.";
+    if (empty($dte_naiss_etu)) $errors[] = "La date de naissance est requise.";
+
+    if (empty($errors)) {
+        try {
+            // Préparer la requête de mise à jour
+            $sql = "UPDATE etudiant SET 
+                        nom_etu = ?, 
+                        prenoms_etu = ?, 
+                        email_etu = ?, 
+                        telephone = ?, 
+                        lieu_naissance = ?, 
+                        dte_naiss_etu = ?
+                    WHERE num_etu = ?";
+            $stmt = $pdo->prepare($sql);
+            $stmt->execute([$nom, $prenoms, $email, $telephone, $lieu_naissance, $dte_naiss_etu, $num_etu]);
+
+            // Mettre à jour le nom dans la session pour qu'il soit affiché correctement partout
+            $_SESSION['nom_prenom'] = $prenoms . ' ' . $nom;
+
+            // Message de succès
+            $_SESSION['message'] = "Vos informations ont été mises à jour avec succès.";
+            $_SESSION['message_type'] = "success";
+
+        } catch (\PDOException $e) {
+            $_SESSION['message'] = "Erreur lors de la mise à jour : " . $e->getMessage();
+            $_SESSION['message_type'] = "error";
+        }
+    } else {
+        $_SESSION['message'] = implode("<br>", $errors);
+        $_SESSION['message_type'] = "error";
+    }
+
+    // Rediriger pour éviter la resoumission du formulaire
+    header('Location: informations_personnelles.php');
+    exit;
+}
+
+// --- RÉCUPÉRATION DES DONNÉES ACTUELLES DE L'ÉTUDIANT POUR AFFICHAGE ---
+$stmt_etudiant = $pdo->prepare("
+    SELECT nom_etu, prenoms_etu, dte_naiss_etu, email_etu, lieu_naissance, telephone, lib_filiere, lib_niv_etu
+    FROM etudiant e
+    JOIN filiere f ON e.fk_id_filiere = f.id_filiere
+    JOIN niveau_etude ne ON e.fk_id_niv_etu = ne.id_niv_etu
+    WHERE num_etu = ?
+");
+$stmt_etudiant->execute([$num_etu]);
+$etudiant = $stmt_etudiant->fetch();
+
+// Récupérer et effacer les messages de la session
+$message = $_SESSION['message'] ?? null;
+$message_type = $_SESSION['message_type'] ?? null;
+unset($_SESSION['message'], $_SESSION['message_type']);
+
+?>
 <!DOCTYPE html>
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SYGECOS - Mes Informations Personnelles</title>
+    <title>SYGECOS - Mes Informations</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         :root {
-            --primary-50: #f8fafc; --primary-100: #f1f5f9; --primary-200: #e2e8f0; --primary-300: #cbd5e1; --primary-400: #94a3b8; --primary-500: #64748b; --primary-600: #475569; --primary-700: #334155; --primary-800: #1e293b; --primary-900: #0f172a;
-            --accent-50: #eff6ff; --accent-100: #dbeafe; --accent-200: #bfdbfe; --accent-300: #93c5fd; --accent-400: #60a5fa; --accent-500: #3b82f6; --accent-600: #2563eb; --accent-700: #1d4ed8; --accent-800: #1e40af; --accent-900: #1e3a8a;
-            --secondary-50: #f0fdf4; --secondary-100: #dcfce7; --secondary-500: #22c55e; --secondary-600: #16a34a;
-            --success-500: #22c55e; --warning-500: #f59e0b; --error-500: #ef4444; --info-500: #3b82f6;
-            --white: #ffffff; --gray-50: #f9fafb; --gray-100: #f3f4f6; --gray-200: #e5e7eb; --gray-300: #d1d5db; --gray-400: #9ca3af; --gray-500: #6b7280; --gray-600: #4b5563; --gray-700: #374151; --gray-800: #1f2937; --gray-900: #111827;
-            --sidebar-width: 280px; --sidebar-collapsed-width: 80px; --topbar-height: 70px;
+            --primary-800: #1e293b; --primary-900: #0f172a;
+            --accent-50: #eff6ff; --accent-100: #dbeafe; --accent-600: #2563eb; --accent-700: #1d4ed8;
+            --secondary-50: #f0fdf4; --secondary-100: #dcfce7; --secondary-600: #16a34a;
+            --error-50: #fef2f2; --error-500: #ef4444; --error-600: #dc2626;
+            --white: #ffffff; --gray-50: #f9fafb; --gray-200: #e5e7eb; --gray-300: #d1d5db; --gray-600: #4b5563; --gray-700: #374151; --gray-800: #1f2937; --gray-900: #111827;
+            --sidebar-width: 280px;
             --font-primary: 'Segoe UI', system-ui, -apple-system, sans-serif;
-            --text-xs: 0.75rem; --text-sm: 0.875rem; --text-base: 1rem; --text-lg: 1.125rem; --text-xl: 1.25rem; --text-2xl: 1.5rem; --text-3xl: 1.875rem;
-            --space-1: 0.25rem; --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem; --space-16: 4rem;
-            --radius-sm: 0.25rem; --radius-md: 0.5rem; --radius-lg: 0.75rem; --radius-xl: 1rem; --radius-2xl: 1.5rem; --radius-3xl: 2rem;
-            --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05); --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1); --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.05); --shadow-xl: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 8px 10px -6px rgb(0 0 0 / 0.1);
-            --transition-fast: 150ms ease-in-out; --transition-normal: 250ms ease-in-out; --transition-slow: 350ms ease-in-out;
+            --text-sm: 0.875rem; --text-base: 1rem; --text-lg: 1.125rem; --text-xl: 1.25rem; --text-3xl: 1.875rem;
+            --space-2: 0.5rem; --space-3: 0.75rem; --space-4: 1rem; --space-6: 1.5rem; --space-8: 2rem;
+            --radius-md: 0.5rem; --radius-lg: 0.75rem; --radius-xl: 1rem;
+            --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+            --transition-normal: 250ms ease-in-out;
         }
-
-        /* === RESET === */
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body { font-family: var(--font-primary); background-color: var(--gray-50); color: var(--gray-800); overflow-x: hidden; }
-
-        /* === LAYOUT PRINCIPAL === */
+        body { font-family: var(--font-primary); background-color: var(--gray-50); color: var(--gray-800); margin: 0; }
         .admin-layout { display: flex; min-height: 100vh; }
         .main-content { flex: 1; margin-left: var(--sidebar-width); transition: margin-left var(--transition-normal); }
-        .main-content.sidebar-collapsed { margin-left: var(--sidebar-collapsed-width); }
-
-        /* === SIDEBAR === */
-        .sidebar { position: fixed; top: 0; left: 0; width: var(--sidebar-width); height: 100vh; background: linear-gradient(180deg, var(--primary-800) 0%, var(--primary-900) 100%); color: white; z-index: 1000; transition: all var(--transition-normal); overflow-y: auto; overflow-x: hidden; }
-        .sidebar.collapsed { width: var(--sidebar-collapsed-width); }
-        .sidebar::-webkit-scrollbar { width: 4px; } .sidebar::-webkit-scrollbar-track { background: var(--primary-900); } .sidebar::-webkit-scrollbar-thumb { background: var(--primary-600); border-radius: 2px; }
-        .sidebar-header { padding: var(--space-6); border-bottom: 1px solid var(--primary-700); display: flex; align-items: center; gap: var(--space-3); }
-        .sidebar-logo { width: 40px; height: 40px; background: var(--accent-500); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; flex-shrink: 0; } .sidebar-logo img { width: 28px; height: 28px; object-fit: contain; filter: brightness(0) invert(1); }
-        .sidebar-title { font-size: var(--text-xl); font-weight: 700; white-space: nowrap; opacity: 1; transition: opacity var(--transition-normal); } .sidebar.collapsed .sidebar-title { opacity: 0; }
-        .sidebar-nav { padding: var(--space-4) 0; }
-        .nav-section { margin-bottom: var(--space-6); }
-        .nav-section-title { padding: var(--space-2) var(--space-6); font-size: var(--text-xs); font-weight: 600; text-transform: uppercase; letter-spacing: 0.05em; color: var(--primary-400); white-space: nowrap; opacity: 1; transition: opacity var(--transition-normal); } .sidebar.collapsed .nav-section-title { opacity: 0; }
-        .nav-item { margin-bottom: var(--space-1); }
-        .nav-link { display: flex; align-items: center; padding: var(--space-3) var(--space-6); color: var(--primary-200); text-decoration: none; transition: all var(--transition-fast); position: relative; gap: var(--space-3); }
-        .nav-link:hover { background: rgba(255, 255, 255, 0.1); color: white; }
-        .nav-link.active { background: var(--accent-600); color: white; }
-        .nav-link.active::before { content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: var(--accent-300); }
-        .nav-icon { width: 20px; height: 20px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
-        .nav-text { white-space: nowrap; opacity: 1; transition: opacity var(--transition-normal); } .sidebar.collapsed .nav-text { opacity: 0; }
-        .nav-submenu { margin-left: var(--space-8); margin-top: var(--space-2); border-left: 2px solid var(--primary-700); padding-left: var(--space-4); } .sidebar.collapsed .nav-submenu { display: none; }
-        .nav-submenu .nav-link { padding: var(--space-2) var(--space-4); font-size: var(--text-sm); }
-
-        /* === TOPBAR === */
-        .topbar { height: var(--topbar-height); background: var(--white); border-bottom: 1px solid var(--gray-200); padding: 0 var(--space-6); display: flex; align-items: center; justify-content: space-between; box-shadow: var(--shadow-sm); position: sticky; top: 0; z-index: 100; }
-        .topbar-left { display: flex; align-items: center; gap: var(--space-4); }
-        .sidebar-toggle { width: 40px; height: 40px; border: none; background: var(--gray-100); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all var(--transition-fast); color: var(--gray-600); } .sidebar-toggle:hover { background: var(--gray-200); color: var(--gray-800); }
-        .page-title { font-size: var(--text-xl); font-weight: 600; color: var(--gray-800); }
-        .topbar-right { display: flex; align-items: center; gap: var(--space-4); }
-        .topbar-button { width: 40px; height: 40px; border: none; background: var(--gray-100); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all var(--transition-fast); color: var(--gray-600); position: relative; } .topbar-button:hover { background: var(--gray-200); color: var(--gray-800); }
-        .notification-badge { position: absolute; top: -2px; right: -2px; width: 18px; height: 18px; background: var(--error-500); border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 600; color: white; }
-        .user-menu { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-2) var(--space-3); border-radius: var(--radius-lg); cursor: pointer; transition: background var(--transition-fast); } .user-menu:hover { background: var(--gray-100); }
-        .user-info { text-align: right; } .user-name { font-size: var(--text-sm); font-weight: 600; color: var(--gray-800); line-height: 1.2; } .user-role { font-size: var(--text-xs); color: var(--gray-500); }
-
-        /* === PAGE CONTENT === */
-        .page-content { padding: var(--space-6); }
-        .page-header { margin-bottom: var(--space-8); display: flex; justify-content: space-between; align-items: center; }
+        .page-content { padding: var(--space-8); max-width: 1000px; margin: 0 auto; }
+        .page-header { margin-bottom: var(--space-8); }
         .page-title-main { font-size: var(--text-3xl); font-weight: 700; color: var(--gray-900); }
         .page-subtitle { color: var(--gray-600); font-size: var(--text-lg); margin-top: var(--space-2); }
 
-        .student-profile { display: grid; grid-template-columns: 280px 1fr; gap: var(--space-8); margin-bottom: var(--space-8); }
-        .profile-card { background: var(--white); border-radius: var(--radius-xl); padding: var(--space-6); box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); }
-        .profile-header { display: flex; flex-direction: column; align-items: center; text-align: center; margin-bottom: var(--space-6); }
-        .profile-avatar { width: 120px; height: 120px; border-radius: 50%; background-color: var(--gray-200); display: flex; align-items: center; justify-content: center; margin-bottom: var(--space-4); overflow: hidden; }
-        .profile-avatar img { width: 100%; height: 100%; object-fit: cover; }
-        .profile-name { font-size: var(--text-xl); font-weight: 700; margin-bottom: var(--space-1); }
-        .profile-id { color: var(--gray-600); font-size: var(--text-sm); margin-bottom: var(--space-4); }
-        .profile-badge { display: inline-block; padding: var(--space-1) var(--space-3); background-color: var(--secondary-100); color: var(--secondary-600); border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: 600; }
-        .profile-details { width: 100%; }
-        .detail-item { display: flex; justify-content: space-between; padding: var(--space-3) 0; border-bottom: 1px solid var(--gray-200); }
-        .detail-label { color: var(--gray-600); font-weight: 600; }
-        .detail-value { color: var(--gray-800); text-align: right; }
-
-        .info-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: var(--space-6); }
-        .info-card { background: var(--white); border-radius: var(--radius-xl); padding: var(--space-6); box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); }
-        .info-card-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: var(--space-4); }
-        .info-card-title { font-size: var(--text-lg); font-weight: 600; color: var(--gray-900); }
-        .info-card-icon { width: 40px; height: 40px; background-color: var(--accent-100); border-radius: var(--radius-lg); display: flex; align-items: center; justify-content: center; color: var(--accent-600); }
-
-        .table-container { background: var(--white); border-radius: var(--radius-xl); box-shadow: var(--shadow-sm); border: 1px solid var(--gray-200); overflow: hidden; margin-bottom: var(--space-8); }
-        .table-header { padding: var(--space-6); border-bottom: 1px solid var(--gray-200); display: flex; justify-content: space-between; align-items: center; }
-        .table-title { font-size: var(--text-xl); font-weight: 600; color: var(--gray-900); }
-        .table-actions { display: flex; gap: var(--space-3); align-items: center; }
-
-        .table-wrapper { overflow-x: auto; }
-        .data-table { width: 100%; border-collapse: collapse; }
-        .data-table th, .data-table td { padding: var(--space-3); text-align: left; border-bottom: 1px solid var(--gray-200); font-size: var(--text-sm); }
-        .data-table th { background-color: var(--gray-50); font-weight: 600; color: var(--gray-700); }
-        .data-table tbody tr:hover { background-color: var(--gray-50); }
-        .data-table td { color: var(--gray-800); }
-
-        .badge { padding: var(--space-1) var(--space-3); border-radius: var(--radius-md); font-size: var(--text-xs); font-weight: 600; }
-        .badge-success { background-color: var(--secondary-100); color: var(--secondary-600); }
-        .badge-warning { background-color: #fef3c7; color: #d97706; }
-        .badge-info { background-color: var(--accent-100); color: var(--accent-600); }
-
-        .action-buttons { display: flex; gap: var(--space-1); }
-        .btn { padding: var(--space-2) var(--space-3); border-radius: var(--radius-md); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--transition-fast); border: none; display: inline-flex; align-items: center; gap: var(--space-2); text-decoration: none; }
-        .btn:disabled { opacity: 0.5; cursor: not-allowed; }
-        .btn-primary { background-color: var(--accent-600); color: white; } .btn-primary:hover:not(:disabled) { background-color: var(--accent-700); }
-        .btn-success { background-color: var(--success-500); color: white; } .btn-success:hover:not(:disabled) { background-color: var(--secondary-600); }
-        .btn-warning { background-color: var(--warning-500); color: white; } .btn-warning:hover:not(:disabled) { background-color: #f59e0b; }
-        .btn-danger { background-color: var(--error-500); color: white; } .btn-danger:hover:not(:disabled) { background-color: #dc2626; }
-        .btn-outline { background-color: transparent; color: var(--accent-600); border: 1px solid var(--accent-600); } .btn-outline:hover { background-color: var(--accent-50); }
-        .btn-sm { padding: var(--space-1) var(--space-2); font-size: var(--text-xs); }
-
-        .alert { padding: var(--space-4); border-radius: var(--radius-md); margin-bottom: var(--space-4); display: none; }
-        .alert.success { background-color: var(--secondary-50); color: var(--secondary-600); border: 1px solid var(--secondary-100); }
-        .alert.error { background-color: #fef2f2; color: var(--error-500); border: 1px solid #fecaca; }
-        .alert.info { background-color: var(--accent-50); color: var(--accent-700); border: 1px solid var(--accent-200); }
-
-        .loading-overlay { position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0, 0, 0, 0.5); display: none; align-items: center; justify-content: center; z-index: 9999; }
-        .loading-spinner { width: 40px; height: 40px; border: 4px solid var(--gray-300); border-top-color: var(--accent-500); border-radius: 50%; animation: spin 1s linear infinite; }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        .empty-state { text-align: center; padding: var(--space-16); color: var(--gray-500); }
-        .empty-state i { font-size: 3rem; margin-bottom: var(--space-4); }
-
-        /* Responsive */
-        @media (max-width: 992px) {
-            .student-profile { grid-template-columns: 1fr; }
+        .profile-card { background: var(--white); border-radius: var(--radius-xl); padding: var(--space-8); box-shadow: var(--shadow-md); border: 1px solid var(--gray-200); }
+        .profile-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--gray-200); padding-bottom: var(--space-4); margin-bottom: var(--space-6); }
+        .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-6); }
+        .form-group { display: flex; flex-direction: column; }
+        .form-group.full-width { grid-column: 1 / -1; }
+        .form-group label { font-weight: 600; color: var(--gray-700); margin-bottom: var(--space-2); font-size: var(--text-sm); }
+        .form-group input, .form-group .static-value {
+            width: 100%;
+            padding: var(--space-3) var(--space-4);
+            border: 1px solid var(--gray-300);
+            border-radius: var(--radius-lg);
+            font-size: var(--text-base);
+            transition: all var(--transition-normal);
         }
+        .form-group input:read-only, .form-group .static-value { background-color: var(--gray-50); color: var(--gray-600); border-color: var(--gray-200); cursor: not-allowed; }
+        .form-group input:not(:read-only):focus { outline: none; border-color: var(--accent-600); box-shadow: 0 0 0 3px var(--accent-100); }
+        .form-group .static-value { line-height: 1.5; }
+
+        .form-actions { margin-top: var(--space-8); display: flex; justify-content: flex-end; gap: var(--space-4); }
+        .btn { padding: var(--space-3) var(--space-6); border-radius: var(--radius-lg); font-size: var(--text-base); font-weight: 600; cursor: pointer; transition: all var(--transition-normal); border: none; display: inline-flex; align-items: center; gap: var(--space-2); }
+        .btn-primary { background-color: var(--accent-600); color: white; } .btn-primary:hover { background-color: var(--accent-700); }
+        .btn-secondary { background-color: var(--gray-200); color: var(--gray-800); } .btn-secondary:hover { background-color: var(--gray-300); }
+
+        .alert { padding: var(--space-4); margin-bottom: var(--space-6); border-radius: var(--radius-md); border: 1px solid transparent; font-weight: 500; }
+        .alert-success { background-color: var(--secondary-50); color: var(--secondary-600); border-color: var(--secondary-100); }
+        .alert-error { background-color: var(--error-50); color: var(--error-600); border-color: #fecaca; }
 
         @media (max-width: 768px) {
-            .sidebar { transform: translateX(-100%); }
-            .sidebar.mobile { transform: translateX(0); }
             .main-content { margin-left: 0; }
-            .main-content.sidebar-collapsed { margin-left: 0; }
-            .page-header { flex-direction: column; align-items: flex-start; gap: var(--space-4); }
-            .info-grid { grid-template-columns: 1fr; }
+            .form-grid { grid-template-columns: 1fr; }
         }
     </style>
 </head>
@@ -145,86 +184,63 @@
         <?php include 'sidebar_etudiant.php'; ?>
 
         <main class="main-content" id="mainContent">
-            <?php include 'topbar.php'; ?>
-
             <div class="page-content">
                 <div class="page-header">
-                    <div>
-                        <h1 class="page-title-main">Mes Informations Personnelles</h1>
-                        <p class="page-subtitle">Gérez vos informations de contact et vos préférences</p>
-                    </div>
-                    <div>
-                        <button class="btn btn-primary">
-                            <i class="fas fa-save"></i> Enregistrer
-                        </button>
-                    </div>
+                    <h1 class="page-title-main">Mes Informations Personnelles</h1>
+                    <p class="page-subtitle">Consultez et modifiez vos informations personnelles ici.</p>
                 </div>
 
-                <div class="student-profile">
-                    <div class="profile-card">
+                <?php if ($message): ?>
+                    <div class="alert alert-<?= htmlspecialchars($message_type) ?>">
+                        <?= $message ?>
+                    </div>
+                <?php endif; ?>
+
+                <div class="profile-card">
+                    <form id="profileForm" method="POST">
                         <div class="profile-header">
-                            <div class="profile-avatar">
-                                <i class="fas fa-user" style="font-size: 3rem; color: var(--gray-500);"></i>
-                            </div>
-                            <button class="btn btn-outline" style="margin-top: var(--space-4);">
-                                <i class="fas fa-camera"></i> Changer la photo
-                            </button>
-                        </div>
-                    </div>
-
-                    <div>
-                        <!-- Informations personnelles -->
-                        <div class="info-card" style="margin-bottom: var(--space-6);">
-                            <div class="info-card-header">
-                                <h3 class="info-card-title">Informations Personnelles</h3>
-                                <div class="info-card-icon">
-                                    <i class="fas fa-id-card"></i>
-                                </div>
-                            </div>
-                            <div class="info-grid" style="grid-template-columns: 1fr;">
-                                <div>
-                                    <div class="detail-item">
-                                        <span class="detail-label">Nom complet:</span>
-                                        <span class="detail-value"><?= htmlspecialchars($etudiant['prenoms_etu'] ?? '') . ' ' . htmlspecialchars($etudiant['nom_etu'] ?? '') ?></span>
-                                    </div>
-                                    <div class="detail-item">
-                                        <span class="detail-label">Date de naissance:</span>
-                                        <input type="date" class="form-control" value="2000-05-15">
-                                    </div>
-                                    <div class="detail-item">
-                                        <span class="detail-label">Lieu de naissance:</span>
-                                        <input type="text" class="form-control" value="Abidjan">
-                                    </div>
-                                </div>
+                            <h2 style="font-size: var(--text-xl); font-weight:600;">Détails du profil</h2>
+                            <div class="form-actions" id="initialActions">
+                                <button type="button" class="btn btn-primary" id="editBtn"><i class="fas fa-pencil-alt"></i> Modifier</button>
                             </div>
                         </div>
 
-                        <!-- Coordonnées -->
-                        <div class="info-card">
-                            <div class="info-card-header">
-                                <h3 class="info-card-title">Coordonnées</h3>
-                                <div class="info-card-icon">
-                                    <i class="fas fa-address-book"></i>
-                                </div>
+                        <div class="form-grid">
+                            <div class="form-group">
+                                <label for="nom_etu">Nom</label>
+                                <input type="text" id="nom_etu" name="nom_etu" value="<?= htmlspecialchars($etudiant['nom_etu']) ?>" readonly required>
                             </div>
-                            <div class="info-grid" style="grid-template-columns: 1fr;">
-                                <div>
-                                    <div class="detail-item">
-                                        <span class="detail-label">Email:</span>
-                                        <input type="email" class="form-control" value="<?= htmlspecialchars($etudiant['email_etu'] ?? '') ?>">
-                                    </div>
-                                    <div class="detail-item">
-                                        <span class="detail-label">Téléphone:</span>
-                                        <input type="tel" class="form-control" value="+225 07 08 09 10 11">
-                                    </div>
-                                    <div class="detail-item">
-                                        <span class="detail-label">Adresse:</span>
-                                        <textarea class="form-control">Rue des Écoles, Cocody, Abidjan</textarea>
-                                    </div>
-                                </div>
+                            <div class="form-group">
+                                <label for="prenoms_etu">Prénoms</label>
+                                <input type="text" id="prenoms_etu" name="prenoms_etu" value="<?= htmlspecialchars($etudiant['prenoms_etu']) ?>" readonly required>
+                            </div>
+                            <div class="form-group">
+                                <label for="email_etu">Adresse Email</label>
+                                <input type="email" id="email_etu" name="email_etu" value="<?= htmlspecialchars($etudiant['email_etu']) ?>" readonly required>
+                            </div>
+                            <div class="form-group">
+                                <label for="telephone">Téléphone</label>
+                                <input type="tel" id="telephone" name="telephone" value="<?= htmlspecialchars($etudiant['telephone'] ?? '') ?>" readonly>
+                            </div>
+                             <div class="form-group">
+                                <label for="dte_naiss_etu">Date de Naissance</label>
+                                <input type="date" id="dte_naiss_etu" name="dte_naiss_etu" value="<?= htmlspecialchars($etudiant['dte_naiss_etu']) ?>" readonly required>
+                            </div>
+                            <div class="form-group">
+                                <label for="lieu_naissance">Lieu de Naissance</label>
+                                <input type="text" id="lieu_naissance" name="lieu_naissance" value="<?= htmlspecialchars($etudiant['lieu_naissance'] ?? '') ?>" readonly>
+                            </div>
+                            <div class="form-group full-width">
+                                <label>Filière et Niveau</label>
+                                <div class="static-value"><?= htmlspecialchars($etudiant['lib_filiere'] . ' - ' . $etudiant['lib_niv_etu']) ?></div>
                             </div>
                         </div>
-                    </div>
+
+                        <div class="form-actions" id="editActions" style="display: none;">
+                            <button type="button" class="btn btn-secondary" id="cancelBtn">Annuler</button>
+                            <button type="submit" class="btn btn-primary" id="saveBtn"><i class="fas fa-save"></i> Enregistrer les modifications</button>
+                        </div>
+                    </form>
                 </div>
             </div>
         </main>
@@ -232,48 +248,43 @@
 
     <script>
         document.addEventListener('DOMContentLoaded', function() {
-            initSidebar();
-        });
+            const form = document.getElementById('profileForm');
+            const inputs = form.querySelectorAll('input[name]');
+            const editBtn = document.getElementById('editBtn');
+            const cancelBtn = document.getElementById('cancelBtn');
+            const saveBtn = document.getElementById('saveBtn');
+            const initialActions = document.getElementById('initialActions');
+            const editActions = document.getElementById('editActions');
 
-        // Fonctions pour gérer la sidebar
-        function initSidebar() {
-            const sidebarToggle = document.getElementById('sidebarToggle');
-            const sidebar = document.getElementById('sidebar');
-            const mainContent = document.getElementById('mainContent');
+            let originalValues = {};
 
-            if (sidebarToggle && sidebar && mainContent) {
-                sidebarToggle.addEventListener('click', function() {
-                    sidebar.classList.toggle('collapsed');
-                    mainContent.classList.toggle('sidebar-collapsed');
-                });
-            }
+            // Store original values
+            inputs.forEach(input => {
+                originalValues[input.name] = input.value;
+            });
 
-            // Responsive: Gestion mobile
-            function handleResize() {
-                if (window.innerWidth <= 768) {
-                    if (sidebar) sidebar.classList.add('mobile');
-                } else {
-                    if (sidebar) {
-                        sidebar.classList.remove('mobile');
-                        sidebar.classList.remove('collapsed');
+            function toggleEditMode(isEditing) {
+                inputs.forEach(input => {
+                    // Ne pas rendre modifiable les champs qui ne doivent pas l'être
+                    if (input.name !== 'filiere_niveau') {
+                         input.readOnly = !isEditing;
                     }
-                    if (mainContent) mainContent.classList.remove('sidebar-collapsed');
-                }
+                });
+                initialActions.style.display = isEditing ? 'none' : 'flex';
+                editActions.style.display = isEditing ? 'flex' : 'none';
             }
 
-            window.addEventListener('resize', handleResize);
-            handleResize();
-        }
+            editBtn.addEventListener('click', function() {
+                toggleEditMode(true);
+            });
 
-        // Fonction pour afficher/cacher le loading
-        function showLoading(show) {
-            const overlay = document.getElementById('loadingOverlay');
-            overlay.style.display = show ? 'flex' : 'none';
-        }
-
-        // Initialisation au chargement
-        document.addEventListener('DOMContentLoaded', function() {
-            initSidebar();
+            cancelBtn.addEventListener('click', function() {
+                // Restore original values
+                inputs.forEach(input => {
+                    input.value = originalValues[input.name];
+                });
+                toggleEditMode(false);
+            });
         });
     </script>
 </body>

@@ -167,7 +167,7 @@ try {
         case 'Responsable de filière':   $redirect = 'dashHome.php';                 break;
         case 'Responsable de niveau':    $redirect = 'dashboard_niveau.php';         break;
         case 'Enseignant':               $redirect = 'dashboard_enseignant.php';     break;
-        case 'Etudiant':                 $redirect = 'informations_personnelles.php';break;
+        case 'Etudiant':                 $redirect = 'dashboard_etudiant.php';break;
         case 'Doyen':                    $redirect = 'dashboard_doyen.php';          break;
         case 'Commission de validation': $redirect = 'dashboard_commission.php';     break;
     }
